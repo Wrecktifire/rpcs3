@@ -1,5 +1,20 @@
-#include "debugger_frame.h"
+﻿#include "debugger_frame.h"
+#include "register_editor_dialog.h"
+#include "instruction_editor_dialog.h"
+#include "gui_settings.h"
+#include "debugger_list.h"
+#include "breakpoint_list.h"
+#include "breakpoint_handler.h"
 #include "qt_utils.h"
+
+#include "Emu/System.h"
+#include "Emu/IdManager.h"
+#include "Emu/Cell/PPUDisAsm.h"
+#include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUDisAsm.h"
+#include "Emu/Cell/SPUThread.h"
+#include "Emu/CPU/CPUThread.h"
+#include "Emu/CPU/CPUDisAsm.h"
 
 #include <QKeyEvent>
 #include <QScrollBar>
@@ -7,10 +22,12 @@
 #include <QFontDatabase>
 #include <QCompleter>
 #include <QMenu>
-#include <QJSEngine>
+#include <QVBoxLayout>
+#include <QTimer>
+#include <atomic>
 
 constexpr auto qstr = QString::fromStdString;
-extern bool user_asked_for_frame_capture;
+extern std::atomic<bool> user_asked_for_frame_capture;
 
 debugger_frame::debugger_frame(std::shared_ptr<gui_settings> settings, QWidget *parent)
 	: custom_dock_widget(tr("Debugger"), parent), xgui_settings(settings)
@@ -264,13 +281,15 @@ void debugger_frame::UpdateUI()
 {
 	UpdateUnitList();
 
+	m_btn_capture->setEnabled(Emu.IsRunning() || Emu.IsPaused());
+
 	if (m_no_thread_selected) return;
 
 	const auto cpu = this->cpu.lock();
 
 	if (!cpu)
 	{
-		if (m_last_pc != -1 || m_last_stat)
+		if (m_last_pc != umax || m_last_stat)
 		{
 			m_last_pc = -1;
 			m_last_stat = 0;
@@ -390,7 +409,7 @@ void debugger_frame::OnSelectUnit()
 void debugger_frame::DoUpdate()
 {
 	// Check if we need to disable a step over bp
-	if (m_last_step_over_breakpoint != -1 && GetPc() == m_last_step_over_breakpoint)
+	if (m_last_step_over_breakpoint != umax && GetPc() == m_last_step_over_breakpoint)
 	{
 		m_breakpoint_handler->RemoveBreakpoint(m_last_step_over_breakpoint);
 		m_last_step_over_breakpoint = -1;
@@ -516,41 +535,9 @@ u64 debugger_frame::EvaluateExpression(const QString& expression)
 
 	if (!thread) return 0;
 
-	// Parse expression
-	QJSEngine scriptEngine;
-	scriptEngine.globalObject().setProperty("pc", GetPc());
-
-	if (thread->id_type() == 1)
-	{
-		auto ppu = static_cast<ppu_thread*>(thread.get());
-
-		for (int i = 0; i < 32; ++i)
-		{
-			scriptEngine.globalObject().setProperty(QString("r%1hi").arg(i), QJSValue(static_cast<u32>(ppu->gpr[i] >> 32)));
-			scriptEngine.globalObject().setProperty(QString("r%1").arg(i), QJSValue(static_cast<u32>(ppu->gpr[i])));
-		}
-
-		scriptEngine.globalObject().setProperty("lrhi", QJSValue(static_cast<u32>(ppu->lr >> 32)));
-		scriptEngine.globalObject().setProperty("lr", QJSValue(static_cast<u32>(ppu->lr)));
-		scriptEngine.globalObject().setProperty("ctrhi", QJSValue(static_cast<u32>(ppu->ctr >> 32)));
-		scriptEngine.globalObject().setProperty("ctr", QJSValue(static_cast<u32>(ppu->ctr)));
-		scriptEngine.globalObject().setProperty("cia", QJSValue(ppu->cia));
-	}
-	else
-	{
-		auto spu = static_cast<spu_thread*>(thread.get());
-
-		for (int i = 0; i < 128; ++i)
-		{
-			scriptEngine.globalObject().setProperty(QString("r%1hi").arg(i), QJSValue(spu->gpr[i]._u32[0]));
-			scriptEngine.globalObject().setProperty(QString("r%1lo").arg(i), QJSValue(spu->gpr[i]._u32[1]));
-			scriptEngine.globalObject().setProperty(QString("r%1hilo").arg(i), QJSValue(spu->gpr[i]._u32[2]));
-			scriptEngine.globalObject().setProperty(QString("r%1hihi").arg(i), QJSValue(spu->gpr[i]._u32[3]));
-		}
-	}
-
+	// Parse expression(or at least used to, was nuked to remove the need for QtJsEngine)
 	const QString fixed_expression = QRegExp("^[A-Fa-f0-9]+$").exactMatch(expression) ? "0x" + expression : expression;
-	return static_cast<ulong>(scriptEngine.evaluate(fixed_expression).toNumber());
+	return static_cast<ulong>(fixed_expression.toULong(nullptr, 0));
 }
 
 void debugger_frame::ClearBreakpoints()
@@ -587,7 +574,7 @@ void debugger_frame::DoStep(bool stepOver)
 
 				// Undefine previous step over breakpoint if it hasnt been already
 				// This can happen when the user steps over a branch that doesn't return to itself
-				if (m_last_step_over_breakpoint != -1)
+				if (m_last_step_over_breakpoint != umax)
 				{
 					m_breakpoint_handler->RemoveBreakpoint(next_instruction_pc);
 				}

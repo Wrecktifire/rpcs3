@@ -1,4 +1,5 @@
 ﻿#include "gs_frame.h"
+#include "gui_settings.h"
 
 #include "Utilities/Config.h"
 #include "Utilities/Timer.h"
@@ -7,13 +8,8 @@
 #include "Emu/Cell/Modules/cellScreenshot.h"
 
 #include <QKeyEvent>
-#include <QTimer>
-#include <QThread>
-#include <QLibraryInfo>
 #include <QMessageBox>
 #include <string>
-
-#include "rpcs3_version.h"
 
 #include "png.h"
 
@@ -31,36 +27,24 @@
 #endif
 #endif
 
+#ifdef _WIN32
+#include <QWinTHumbnailToolbar>
+#include <QWinTHumbnailToolbutton>
+#elif HAVE_QTDBUS
+#include <QtDBus/QDBusMessage>
+#include <QtDBus/QDBusConnection>
+#endif
+
 LOG_CHANNEL(screenshot);
 
 constexpr auto qstr = QString::fromStdString;
 
-gs_frame::gs_frame(const QString& title, const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings)
-	: QWindow(), m_windowTitle(title), m_gui_settings(gui_settings)
+gs_frame::gs_frame(const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings)
+	: QWindow(), m_gui_settings(gui_settings)
 {
 	m_disable_mouse = gui_settings->GetValue(gui::gs_disableMouse).toBool();
 
-	// Get version by substringing VersionNumber-buildnumber-commithash to get just the part before the dash
-	std::string version = rpcs3::get_version().to_string();
-	version = version.substr(0 , version.find_last_of('-'));
-
-	// Add branch and commit hash to version on frame unless it's master.
-	if ((rpcs3::get_branch().compare("master") != 0) && (rpcs3::get_branch().compare("HEAD") != 0))
-	{
-		version = version + "-" + rpcs3::get_version().to_string().substr((rpcs3::get_version().to_string().find_last_of('-') + 1), 8) + "-" + rpcs3::get_branch();
-	}
-
-	m_windowTitle += qstr(" | " + version);
-
-	if (!Emu.GetTitle().empty())
-	{
-		m_windowTitle += qstr(" | " + Emu.GetTitle());
-	}
-
-	if (!Emu.GetTitleID().empty())
-	{
-		m_windowTitle += qstr(" [" + Emu.GetTitleID() + ']');
-	}
+	m_window_title = qstr(Emu.GetFormattedTitle(0));
 
 	if (!appIcon.isNull())
 	{
@@ -76,7 +60,7 @@ gs_frame::gs_frame(const QString& title, const QRect& geometry, const QIcon& app
 	setMinimumWidth(160);
 	setMinimumHeight(90);
 	setGeometry(geometry);
-	setTitle(m_windowTitle);
+	setTitle(m_window_title);
 	setVisibility(Hidden);
 	create();
 
@@ -291,30 +275,21 @@ void gs_frame::flip(draw_context_t, bool /*skip_frame*/)
 {
 	static Timer fps_t;
 
-	if (!m_show_fps_in_title && !g_cfg.misc.show_fps_in_title)
-	{
-		return;
-	}
-
 	++m_frames;
 
 	if (fps_t.GetElapsedTimeInSec() >= 0.5)
 	{
-		QString fps_title;
+		const QString new_title = qstr(Emu.GetFormattedTitle(m_frames / fps_t.GetElapsedTimeInSec()));
 
-		if ((m_show_fps_in_title = g_cfg.misc.show_fps_in_title.get()))
+		if (new_title != m_window_title)
 		{
-			fps_title = qstr(fmt::format("FPS: %.2f", m_frames / fps_t.GetElapsedTimeInSec()));
+			m_window_title = new_title;
 
-			if (!m_windowTitle.isEmpty())
+			Emu.CallAfter([this, title = std::move(new_title)]()
 			{
-				fps_title += " | ";
-			}
+				setTitle(title);
+			});
 		}
-
-		fps_title += m_windowTitle;
-
-		Emu.CallAfter([this, title = std::move(fps_title)]() { setTitle(title); });
 
 		m_frames = 0;
 		fps_t.Start();
@@ -326,7 +301,7 @@ void gs_frame::take_screenshot(const std::vector<u8> sshot_data, const u32 sshot
 	std::thread(
 		[sshot_width, sshot_height](const std::vector<u8> sshot_data)
 		{
-			std::string screen_path = fs::get_config_dir() + "/screenshots/";
+			std::string screen_path = fs::get_config_dir() + "screenshots/";
 
 			if (!fs::create_dir(screen_path) && fs::g_tls_error != fs::error::exist)
 			{

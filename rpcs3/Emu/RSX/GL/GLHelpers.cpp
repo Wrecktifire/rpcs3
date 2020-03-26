@@ -2,7 +2,7 @@
 #include "GLHelpers.h"
 #include "GLTexture.h"
 #include "GLCompute.h"
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 
 namespace gl
 {
@@ -388,8 +388,8 @@ namespace gl
 			auto src_w = src_rect.width();
 			auto dst_w = dst_rect.width();
 
-			if (xfer_info.src_is_typeless) src_w *= xfer_info.src_scaling_hint;
-			if (xfer_info.dst_is_typeless) dst_w *= xfer_info.dst_scaling_hint;
+			if (xfer_info.src_is_typeless) src_w = static_cast<int>(src_w * xfer_info.src_scaling_hint);
+			if (xfer_info.dst_is_typeless) dst_w = static_cast<int>(dst_w * xfer_info.dst_scaling_hint);
 
 			if (src_w == dst_w)
 			{
@@ -398,7 +398,7 @@ namespace gl
 				{
 					const coord3i src_region = { { src_rect.x1, src_rect.y1, 0 }, { src_rect.width(), src_rect.height(), 1 } };
 					const coord3i dst_region = { { dst_rect.x1, dst_rect.y1, 0 }, { dst_rect.width(), dst_rect.height(), 1 } };
-					gl::copy_typeless(dst, src, dst_region, src_region);
+					gl::copy_typeless(dst, src, static_cast<coord3u>(dst_region), static_cast<coord3u>(src_region));
 				}
 				else
 				{

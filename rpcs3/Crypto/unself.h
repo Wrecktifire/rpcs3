@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "key_vault.h"
 #include "zlib.h"
 
 #include "Utilities/types.h"
 #include "Utilities/File.h"
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 
 LOG_CHANNEL(self_log, "SELF");
 
@@ -414,7 +414,7 @@ class SELFDecrypter
 	std::unique_ptr<u8[]> data_keys;
 	u32 data_keys_length;
 	std::unique_ptr<u8[]> data_buf;
-	u32 data_buf_length;
+	u32 data_buf_length = 0;
 
 	// Main key vault instance.
 	KeyVault key_v;
@@ -489,7 +489,7 @@ private:
 				}
 
 				// Advance the data buffer offset by data size.
-				data_buf_offset += meta_shdr[i].data_size;
+				data_buf_offset += ::narrow<u32>(meta_shdr[i].data_size, HERE);
 			}
 		}
 

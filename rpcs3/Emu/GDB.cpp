@@ -1,10 +1,11 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 
 #include "GDB.h"
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 #include "Utilities/StrUtil.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/System.h"
+#include "Emu/system_config.h"
 #include "Emu/IdManager.h"
 #include "Emu/CPU/CPUThread.h"
 #include "Emu/Cell/PPUThread.h"
@@ -140,7 +141,7 @@ void gdb_thread::start_server()
 
 		if (getaddrinfo(bind_addr.c_str(), bind_port.c_str(), &hints, &info) == 0)
 		{
-			server_socket = socket(info->ai_family, info->ai_socktype, info->ai_protocol);
+			server_socket = static_cast<int>(socket(info->ai_family, info->ai_socktype, info->ai_protocol));
 
 			if (server_socket == -1)
 			{
@@ -172,7 +173,7 @@ void gdb_thread::start_server()
 	}
 
 	// Fallback to UNIX socket
-	server_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+	server_socket = static_cast<int>(socket(AF_UNIX, SOCK_STREAM, 0));
 
 	if (server_socket == -1)
 	{
@@ -238,7 +239,7 @@ char gdb_thread::read_char()
 
 u8 gdb_thread::read_hexbyte()
 {
-	std::string s = "";
+	std::string s;
 	s += read_char();
 	s += read_char();
 	return hex_to_u8(s);
@@ -302,21 +303,13 @@ bool gdb_thread::read_cmd(gdb_cmd& out_cmd)
 {
 	while (true)
 	{
-		try
+		if (try_read_cmd(out_cmd))
 		{
-			if (try_read_cmd(out_cmd))
-			{
-				ack(true);
-				return true;
-			}
+			ack(true);
+			return true;
+		}
 
-			ack(false);
-		}
-		catch (const std::runtime_error& e)
-		{
-			GDB.error("Error: %s", e.what());
-			return false;
-		}
+		ack(false);
 	}
 }
 
@@ -357,7 +350,8 @@ void gdb_thread::send_cmd(const std::string& cmd)
 	std::string buf;
 	buf.reserve(cmd.length() + 4);
 	buf += "$";
-	for (int i = 0; i < cmd.length(); ++i) {
+	for (std::size_t i = 0; i < cmd.length(); ++i)
+	{
 		checksum = (checksum + append_encoded_char(cmd[i], buf)) % 256;
 	}
 	buf += "#";
@@ -546,7 +540,7 @@ bool gdb_thread::cmd_supported(gdb_cmd& cmd)
 
 bool gdb_thread::cmd_thread_info(gdb_cmd& cmd)
 {
-	std::string result = "";
+	std::string result;
 	const auto on_select = [&](u32, cpu_thread& cpu)
 	{
 		if (result.length()) {
@@ -597,7 +591,7 @@ bool gdb_thread::cmd_write_register(gdb_cmd& cmd)
 	if (th->id_type() == 1) {
 		auto ppu = static_cast<named_thread<ppu_thread>*>(th.get());
 		size_t eq_pos = cmd.data.find('=');
-		if (eq_pos == std::string::npos) {
+		if (eq_pos == umax) {
 			GDB.warning("Wrong write_register cmd data '%s'.", cmd.data);
 			return send_cmd_ack("E02");
 		}
@@ -639,7 +633,7 @@ bool gdb_thread::cmd_write_memory(gdb_cmd& cmd)
 {
 	size_t s = cmd.data.find(',');
 	size_t s2 = cmd.data.find(':');
-	if ((s == std::string::npos) || (s2 == std::string::npos)) {
+	if ((s == umax) || (s2 == umax)) {
 		GDB.warning("Malformed write memory request received: '%s'.", cmd.data);
 		return send_cmd_ack("E01");
 	}
@@ -776,7 +770,7 @@ bool gdb_thread::cmd_set_breakpoint(gdb_cmd& cmd)
 	//software breakpoint
 	if (type == '0') {
 		u32 addr = INVALID_PTR;
-		if (cmd.data.find(';') != std::string::npos) {
+		if (cmd.data.find(';') != umax) {
 			GDB.warning("Received request to set breakpoint with condition, but they are not supported.");
 			return send_cmd_ack("E01");
 		}
@@ -846,7 +840,7 @@ void gdb_thread::operator()()
 	{
 		sockaddr_in client;
 		socklen_t client_len = sizeof(client);
-		client_socket = accept(server_socket, reinterpret_cast<struct sockaddr*>(&client), &client_len);
+		client_socket = static_cast<int>(accept(server_socket, reinterpret_cast<struct sockaddr*>(&client), &client_len));
 
 		if (client_socket == -1)
 		{
@@ -864,7 +858,7 @@ void gdb_thread::operator()()
 			Emu.Pause();
 		}
 
-		try {
+		{
 			char hostbuf[32];
 			inet_ntop(client.sin_family, reinterpret_cast<void*>(&client.sin_addr), hostbuf, 32);
 			GDB.success("Got connection to GDB debug server from %s:%d.", hostbuf, client.sin_port);
@@ -902,16 +896,6 @@ void gdb_thread::operator()()
 					break;
 				}
 			}
-		}
-		catch (const std::runtime_error& e)
-		{
-			if (client_socket != -1)
-			{
-				closesocket(client_socket);
-				client_socket = -1;
-			}
-
-			GDB.error("Error: %s", e.what());
 		}
 	}
 }

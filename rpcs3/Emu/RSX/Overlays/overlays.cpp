@@ -1,170 +1,42 @@
 ﻿#include "stdafx.h"
 #include "overlays.h"
+#include "overlay_message_dialog.h"
 #include "../GSRender.h"
+#include "Input/pad_thread.h"
 
 LOG_CHANNEL(overlays);
-
-static auto s_ascii_lowering_map = []()
-{
-	std::unordered_map<u32, u8> _map;
-
-	// Fullwidth block (FF00-FF5E)
-	for (u32 u = 0xFF01, c = 0x21; u <= 0xFF5E; ++u, ++c)
-	{
-		_map[u] = u8(c);
-	}
-
-	// Em and En space variations (General Punctuation)
-	for (u32 u = 0x2000; u <= 0x200A; ++u)
-	{
-		_map[u] = u8(' ');
-	}
-
-	// Misc space variations
-	_map[0x202F] = u8(0xA0); // narrow NBSP
-	_map[0x205F] = u8(' ');  // medium mathematical space
-	_map[0x3164] = u8(' ');  // hangul filler
-
-	// Ideographic (CJK punctuation)
-	_map[0x3000] = u8(' ');  // space
-	_map[0x3001] = u8(',');  // comma
-	_map[0x3002] = u8('.');  // fullstop
-	_map[0x3003] = u8('"');  // ditto
-	_map[0x3007] = u8('0');  // wide zero
-	_map[0x3008] = u8('<');  // left angle brace
-	_map[0x3009] = u8('>');  // right angle brace
-	_map[0x300A] = u8(0xAB); // double left angle brace
-	_map[0x300B] = u8(0xBB); // double right angle brace
-	_map[0x300C] = u8('[');  // the following are all slight variations on the angular brace
-	_map[0x300D] = u8(']');
-	_map[0x300E] = u8('[');
-	_map[0x300F] = u8(']');
-	_map[0x3010] = u8('[');
-	_map[0x3011] = u8(']');
-	_map[0x3014] = u8('[');
-	_map[0x3015] = u8(']');
-	_map[0x3016] = u8('[');
-	_map[0x3017] = u8(']');
-	_map[0x3018] = u8('[');
-	_map[0x3019] = u8(']');
-	_map[0x301A] = u8('[');
-	_map[0x301B] = u8(']');
-	_map[0x301C] = u8('~');  // wave dash (inverted tilde)
-	_map[0x301D] = u8('"');  // reverse double prime quotation
-	_map[0x301E] = u8('"');  // double prime quotation
-	_map[0x301F] = u8('"');  // low double prime quotation
-	_map[0x3031] = u8('<');  // vertical kana repeat mark
-
-	return _map;
-}();
-
-std::string utf8_to_ascii8(const std::string& utf8_string)
-{
-	std::string out;
-	out.reserve(utf8_string.length());
-
-	const auto end = utf8_string.length();
-	for (u32 index = 0; index < end; ++index)
-	{
-		const u8 code = static_cast<u8>(utf8_string[index]);
-
-		if (!code)
-		{
-			break;
-		}
-
-		if (code <= 0x7F)
-		{
-			out.push_back(code);
-			continue;
-		}
-
-		const auto extra_bytes = (code <= 0xDF) ? 1u : (code <= 0xEF) ? 2u : 3u;
-		if ((index + extra_bytes) > end)
-		{
-			// Malformed string, abort
-			overlays.error("Failed to decode supossedly malformed utf8 string '%s'", utf8_string);
-			break;
-		}
-
-		u32 u_code = 0;
-		switch (extra_bytes)
-		{
-		case 1:
-			// 11 bits, 6 + 5
-			u_code = (u32(code & 0x1F) << 6) | u32(utf8_string[index + 1] & 0x3F);
-			break;
-		case 2:
-			// 16 bits, 6 + 6 + 4
-			u_code = (u32(code & 0xF) << 12) | (u32(utf8_string[index + 1] & 0x3F) << 6) | u32(utf8_string[index + 2] & 0x3F);
-			break;
-		case 3:
-			// 21 bits, 6 + 6 + 6 + 3
-			u_code = (u32(code & 0x7) << 18) | (u32(utf8_string[index + 1] & 0x3F) << 12) | (u32(utf8_string[index + 2] & 0x3F) << 6) | u32(utf8_string[index + 3] & 0x3F);
-			break;
-		default:
-			fmt::throw_exception("Unreachable" HERE);
-		}
-
-		index += extra_bytes;
-
-		if (u_code <= 0xFF)
-		{
-			// Latin-1 supplement block
-			out.push_back(static_cast<u8>(u_code));
-			continue;
-		}
-
-		auto replace = s_ascii_lowering_map.find(u_code);
-		if (replace == s_ascii_lowering_map.end())
-		{
-			out.push_back('#');
-			continue;
-		}
-
-		out.push_back(replace->second);
-	}
-
-	return out;
-}
-
-std::string utf16_to_ascii8(const std::u16string& utf16_string)
-{
-	// Strip extended codes, map to '#' instead (placeholder)
-	std::string out;
-	out.reserve(utf16_string.length());
-
-	for (const auto& code : utf16_string)
-	{
-		if (!code)
-			break;
-
-		out.push_back(code > 0xFF ? '#': static_cast<char>(code));
-	}
-
-	return out;
-}
-
-std::u16string ascii8_to_utf16(const std::string& ascii_string)
-{
-	std::u16string out;
-	out.reserve(ascii_string.length());
-
-	for (const auto& code : ascii_string)
-	{
-		if (!code)
-			break;
-
-		out.push_back(static_cast<char16_t>(code));
-	}
-
-	return out;
-}
 
 namespace rsx
 {
 	namespace overlays
 	{
+		thread_local DECLARE(user_interface::g_thread_bit) = 0;
+
+		u64 user_interface::alloc_thread_bit()
+		{
+			auto [_old, ok] = this->thread_bits.fetch_op([](u64& bits)
+			{
+				if (~bits)
+				{
+					// Set lowest clear bit
+					bits |= bits + 1;
+					return true;
+				}
+
+				return false;
+			});
+
+			if (!ok)
+			{
+				::overlays.fatal("Out of thread bits in user interface");
+				return 0;
+			}
+
+			const u64 r = u64{1} << utils::cnttz64(~_old, false);
+			::overlays.trace("Bit allocated (%u)", r);
+			return r;
+		}
+
 		// Singleton instance declaration
 		fontmgr* fontmgr::m_instance = nullptr;
 
@@ -264,6 +136,12 @@ namespace rsx
 							case CELL_PAD_CTRL_R1:
 								button_id = pad_button::R1;
 								break;
+							case CELL_PAD_CTRL_L2:
+								button_id = pad_button::L2;
+								break;
+							case CELL_PAD_CTRL_R2:
+								button_id = pad_button::R2;
+								break;
 							}
 						}
 
@@ -309,26 +187,26 @@ namespace rsx
 			return 0;
 		}
 
-		void user_interface::close(bool use_callback)
+		void user_interface::close(bool use_callback, bool stop_pad_interception)
 		{
 			// Force unload
 			exit.release(true);
+
+			while (u64 b = thread_bits)
 			{
-				reader_lock lock(m_threadpool_mutex);
-				for (auto& worker : m_workers)
+				if (b == g_thread_bit)
 				{
-					if (std::this_thread::get_id() != worker.get_id() && worker.joinable())
-					{
-						worker.join();
-					}
-					else
-					{
-						worker.detach();
-					}
+					// Don't wait for its own bit
+					break;
 				}
+
+				thread_bits.wait(b);
 			}
 
-			pad::SetIntercepted(false);
+			if (stop_pad_interception)
+			{
+				pad::SetIntercepted(false);
+			}
 
 			if (on_close && use_callback)
 			{

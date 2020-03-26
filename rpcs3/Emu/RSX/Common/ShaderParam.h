@@ -184,7 +184,7 @@ public:
 		std::string simple_var;
 		const auto eq_pos = var.find('=');
 
-		if (eq_pos != std::string::npos)
+		if (eq_pos != umax)
 		{
 			simple_var = var.substr(0, eq_pos - 1);
 		}
@@ -195,7 +195,7 @@ public:
 
 		const auto brace_pos = var.find_last_of(')');
 		std::string prefix;
-		if (brace_pos != std::string::npos)
+		if (brace_pos != umax)
 		{
 			prefix = simple_var.substr(0, brace_pos);
 			simple_var = simple_var.substr(brace_pos);
@@ -226,7 +226,7 @@ public:
 	{
 		std::unordered_map<char, char> swizzle;
 
-		static std::unordered_map<int, char> pos_to_swizzle =
+		static std::unordered_map<uint, char> pos_to_swizzle =
 		{
 			{ 0, 'x' },
 			{ 1, 'y' },
@@ -234,18 +234,18 @@ public:
 			{ 3, 'w' }
 		};
 
-		for (auto &i : pos_to_swizzle)
+		for (auto& p : pos_to_swizzle)
 		{
-			swizzle[i.second] = swizzles[0].length() > i.first ? swizzles[0][i.first] : 0;
+			swizzle[p.second] = swizzles[0].length() > p.first ? swizzles[0][p.first] : 0;
 		}
 
-		for (int i = 1; i < swizzles.size(); ++i)
+		for (uint i = 1; i < swizzles.size(); ++i)
 		{
 			std::unordered_map<char, char> new_swizzle;
 
-			for (auto &sw : pos_to_swizzle)
+			for (auto& p : pos_to_swizzle)
 			{
-				new_swizzle[sw.second] = swizzle[swizzles[i].length() <= sw.first ? '\0' : swizzles[i][sw.first]];
+				new_swizzle[p.second] = swizzle[swizzles[i].length() <= p.first ? '\0' : swizzles[i][p.first]];
 			}
 
 			swizzle = new_swizzle;
@@ -254,10 +254,10 @@ public:
 		swizzles.clear();
 		std::string new_swizzle;
 
-		for (auto &i : pos_to_swizzle)
+		for (auto& p : pos_to_swizzle)
 		{
-			if (swizzle[i.second] != '\0')
-				new_swizzle += swizzle[i.second];
+			if (swizzle[p.second] != '\0')
+				new_swizzle += swizzle[p.second];
 		}
 
 		swizzles.push_back(new_swizzle);

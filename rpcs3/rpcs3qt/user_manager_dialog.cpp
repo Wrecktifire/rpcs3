@@ -6,14 +6,28 @@
 #include "user_manager_dialog.h"
 #include "table_item_delegate.h"
 #include "main_application.h"
+#include "gui_settings.h"
+
+#include "Emu/System.h"
 
 #include "Utilities/StrUtil.h"
-#include "Utilities/Log.h"
+#include "Utilities/File.h"
+#include "util/logs.hpp"
 
 #include <QRegExpValidator>
 #include <QInputDialog>
 #include <QScreen>
 #include <QKeyEvent>
+#include <QHeaderView>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QMenu>
+#include <QDesktopServices>
+#include <QMessageBox>
+#include <QGuiApplication>
+#include <QUrl>
+
+constexpr auto qstr = QString::fromStdString;
 
 LOG_CHANNEL(gui_log, "GUI");
 
@@ -55,7 +69,8 @@ namespace
 }
 
 user_manager_dialog::user_manager_dialog(std::shared_ptr<gui_settings> gui_settings, QWidget* parent)
-	: QDialog(parent), m_user_list(), m_sort_column(1), m_sort_ascending(true), m_gui_settings(gui_settings)
+	: QDialog(parent)
+	, m_gui_settings(gui_settings)
 {
 	setWindowTitle(tr("User Manager"));
 	setMinimumSize(QSize(500, 400));
@@ -202,7 +217,7 @@ void user_manager_dialog::UpdateTable(bool mark_only)
 		m_table->setItem(row, 1, username_item);
 
 		// Compare current config value with the one in this user (only 8 digits in userId)
-		if (m_active_user.compare(0, 8, user.second.GetUserId()) == 0)
+		if (m_active_user.starts_with(user.second.GetUserId()))
 		{
 			user_id_item->setFont(bold_font);
 			username_item->setFont(bold_font);

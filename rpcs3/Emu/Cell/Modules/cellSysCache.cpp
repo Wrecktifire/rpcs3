@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "Emu/System.h"
+#include "Emu/VFS.h"
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
 
@@ -38,7 +39,7 @@ struct syscache_info
 	syscache_info() noexcept
 	{
 		// Check if dev_hdd1 is mounted by parent process
-		if (Emu.hdd1.size())
+		if (!Emu.hdd1.empty())
 		{
 			const auto lock = init.init();
 
@@ -57,7 +58,7 @@ struct syscache_info
 
 		for (auto&& entry : fs::dir(cache_root))
 		{
-			if (entry.is_directory && entry.name.size() >= prefix.size() && entry.name.compare(0, prefix.size(), prefix) == 0)
+			if (entry.is_directory && entry.name.starts_with(prefix))
 			{
 				cache_id = std::move(entry.name);
 				break;

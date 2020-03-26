@@ -1,22 +1,20 @@
 ﻿#include "save_manager_dialog.h"
 
-#include "save_data_info_dialog.h"
 #include "custom_table_widget_item.h"
 #include "qt_utils.h"
+#include "gui_settings.h"
 
 #include "Emu/System.h"
-#include "Emu/VFS.h"
+#include "Emu/Memory/vm.h"
 #include "Loader/PSF.h"
 
 #include <QtConcurrent>
 #include <QDateTime>
-#include <QIcon>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMenu>
 #include <QMessageBox>
-#include <QDesktopWidget>
-#include <QApplication>
+#include <QGuiApplication>
 #include <QUrl>
 #include <QDesktopServices>
 #include <QPainter>
@@ -94,10 +92,13 @@ namespace
 }
 
 save_manager_dialog::save_manager_dialog(std::shared_ptr<gui_settings> gui_settings, std::string dir, QWidget* parent)
-	: QDialog(parent), m_save_entries(), m_dir(dir), m_sort_column(1), m_sort_ascending(true), m_gui_settings(gui_settings)
+	: QDialog(parent)
+	, m_dir(dir)
+	, m_gui_settings(gui_settings)
 {
 	setWindowTitle(tr("Save Manager"));
 	setMinimumSize(QSize(400, 400));
+	setAttribute(Qt::WA_DeleteOnClose);
 
 	Init(dir);
 }

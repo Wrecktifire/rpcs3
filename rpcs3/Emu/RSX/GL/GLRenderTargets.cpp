@@ -1,6 +1,5 @@
 ﻿#include "stdafx.h"
 #include "GLGSRender.h"
-#include "Emu/System.h"
 
 color_format rsx::internals::surface_color_format_to_gl(rsx::surface_color_format color_format)
 {
@@ -55,7 +54,8 @@ color_format rsx::internals::surface_color_format_to_gl(rsx::surface_color_forma
 		{ ::gl::texture::channel::g, ::gl::texture::channel::r, ::gl::texture::channel::g, ::gl::texture::channel::r } };
 
 	case rsx::surface_color_format::x32:
-		return{ ::gl::texture::type::f32, ::gl::texture::format::r, ::gl::texture::internal_format::r32f, true};
+		return{ ::gl::texture::type::f32, ::gl::texture::format::r, ::gl::texture::internal_format::r32f, true,
+		{ ::gl::texture::channel::r, ::gl::texture::channel::r, ::gl::texture::channel::r, ::gl::texture::channel::r } };
 
 	case rsx::surface_color_format::a8b8g8r8:
 		return{ ::gl::texture::type::uint_8_8_8_8, ::gl::texture::format::rgba, ::gl::texture::internal_format::rgba8, false,

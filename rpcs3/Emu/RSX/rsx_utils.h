@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-#include "../System.h"
+#include "../system_config.h"
 #include "Utilities/address_range.h"
 #include "Utilities/geometry.h"
 #include "Utilities/asm.h"
@@ -142,8 +142,10 @@ namespace rsx
 
 	struct avconf
 	{
+		bool _3d  = false;         // Stereo 3D off
 		u8 format = 0;             // XRGB
 		u8 aspect = 0;             // AUTO
+		u8 resolution_id = 2;      // 720p
 		u32 scanline_pitch = 0;    // PACKED
 		atomic_t<f32> gamma = 1.f; // NO GAMMA CORRECTION
 		u32 resolution_x = 1280;   // X RES
@@ -770,7 +772,7 @@ namespace rsx
 	}
 
 	template <int N>
-	void unpack_bitset(std::bitset<N>& block, u64* values)
+	void unpack_bitset(const std::bitset<N>& block, u64* values)
 	{
 		constexpr int count = N / 64;
 		for (int n = 0; n < count; ++n)
@@ -846,6 +848,12 @@ namespace rsx
 			m_data.fetch_or(static_cast<bitmask_type>(mask));
 		}
 
+		bool test_and_set(T mask)
+		{
+			const auto old = m_data.fetch_or(static_cast<bitmask_type>(mask));
+			return (old & static_cast<bitmask_type>(mask)) != 0;
+		}
+
 		auto clear(T mask)
 		{
 			bitmask_type clear_mask = ~(static_cast<bitmask_type>(mask));
@@ -891,7 +899,7 @@ namespace rsx
 
 		simple_array(const std::initializer_list<Ty>& args)
 		{
-			reserve(args.size());
+			reserve(::size32(args));
 
 			for (const auto& arg : args)
 			{

@@ -1,7 +1,7 @@
 ﻿#pragma once
 
 #include "stdafx.h"
-#include <QtCore>
+#include <QDir>
 #include <QComboBox>
 #include <QFont>
 #include <QIcon>
@@ -56,5 +56,11 @@ namespace gui
 
 		// Loads the app icon from path and embeds it centered into an empty square icon
 		QIcon get_app_icon_from_path(const std::string& path, const std::string& title_id);
+
+		// Open a path in the explorer and mark the file
+		void open_dir(const std::string& spath);
+
+		// Open a path in the explorer and mark the file
+		void open_dir(const QString& path);
 	} // utils
 } // gui

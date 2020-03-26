@@ -3,7 +3,7 @@
 #endif
 
 #include "stdafx.h"
-#include "Emu/System.h"
+#include "Emu/system_config.h"
 
 #include "ALSABackend.h"
 
@@ -155,7 +155,7 @@ bool ALSABackend::AddData(const void* src, u32 num_samples)
 		return false;
 	}
 
-	if (res != num_frames)
+	if (res + 0u != num_frames)
 	{
 		ALSA.warning("Error (%d)", res);
 		return false;

@@ -1,5 +1,5 @@
-#include "stdafx.h"
-#include "Emu/System.h"
+﻿#include "stdafx.h"
+#include "Emu/VFS.h"
 #include "TRP.h"
 #include "Crypto/sha1.h"
 #include "Utilities/StrUtil.h"
@@ -148,7 +148,7 @@ void TRPLoader::RenameEntry(const char *oldname, const char *newname)
 	{
 		if (!strcmp(entry.name, oldname))
 		{
-			strcpy_trunc(entry.name, newname);
+			strcpy_trunc(entry.name, std::string_view(newname));
 		}
 	}
 }

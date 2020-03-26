@@ -2,6 +2,12 @@
 
 #include "qt_utils.h"
 #include "welcome_dialog.h"
+#include "main_window.h"
+#include "emu_settings.h"
+#include "gui_settings.h"
+#include "persistent_settings.h"
+#include "gs_frame.h"
+#include "gl_gs_frame.h"
 
 #ifdef WITH_DISCORD_RPC
 #include "_discord_utils.h"
@@ -15,6 +21,9 @@
 #include "stylesheets.h"
 
 #include <QScreen>
+#include <QFontDatabase>
+#include <QLibraryInfo>
+#include <QDirIterator>
 
 #include <clocale>
 
@@ -60,15 +69,15 @@ void gui_application::Init()
 	// Create connects to propagate events throughout Gui.
 	InitializeConnects();
 
-	if (m_main_window)
-	{
-		m_main_window->Init();
-	}
-
 	if (m_gui_settings->GetValue(gui::ib_show_welcome).toBool())
 	{
 		welcome_dialog* welcome = new welcome_dialog();
 		welcome->exec();
+	}
+
+	if (m_main_window)
+	{
+		m_main_window->Init();
 	}
 
 #ifdef WITH_DISCORD_RPC
@@ -233,19 +242,15 @@ std::unique_ptr<gs_frame> gui_application::get_gs_frame()
 
 	switch (video_renderer type = g_cfg.video.renderer)
 	{
-	case video_renderer::null:
-	{
-		frame = new gs_frame("Null", frame_geometry, app_icon, m_gui_settings);
-		break;
-	}
 	case video_renderer::opengl:
 	{
 		frame = new gl_gs_frame(frame_geometry, app_icon, m_gui_settings);
 		break;
 	}
+	case video_renderer::null:
 	case video_renderer::vulkan:
 	{
-		frame = new gs_frame("Vulkan", frame_geometry, app_icon, m_gui_settings);
+		frame = new gs_frame(frame_geometry, app_icon, m_gui_settings);
 		break;
 	}
 	default: fmt::throw_exception("Invalid video renderer: %s" HERE, type);

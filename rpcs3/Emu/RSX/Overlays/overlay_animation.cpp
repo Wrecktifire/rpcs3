@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "overlay_animation.h"
 #include "overlay_controls.h"
+#include "Emu/system_config.h"
 
 #include <numeric>
 
@@ -30,10 +31,10 @@ namespace rsx
                 t = t * t;
                 break;
             case animation_type::ease_out_quad:
-                t = t * (2.0 - t);
+                t = t * (2.0f - t);
                 break;
             case animation_type::ease_in_out_cubic:
-                t = t > 0.5 ? 4.0 * std::pow((t - 1.0), 3.0) + 1.0 : 4.0 * std::pow(t, 3.0);
+                t = t > 0.5f ? 4.0f * std::pow((t - 1.0f), 3.0f) + 1.0f : 4.0f * std::pow(t, 3.0f);
                 break;
             }
 

@@ -342,7 +342,8 @@ private:
 	enum flush_queue_state : u32
 	{
 		ok = 0,
-		deadlock = 1
+		flushing = 1,
+		deadlock = 2
 	};
 
 private:
@@ -455,8 +456,8 @@ private:
 	utils::address_range m_offloader_fault_range;
 	rsx::invalidation_cause m_offloader_fault_cause;
 
-	bool m_render_pass_open = false;
-	u64  m_current_renderpass_key = 0;
+	u32 m_current_subdraw_id = 0;
+	u64 m_current_renderpass_key = 0;
 	VkRenderPass m_cached_renderpass = VK_NULL_HANDLE;
 	std::vector<vk::image*> m_fbo_images;
 
@@ -493,6 +494,7 @@ private:
 
 	void begin_render_pass();
 	void close_render_pass();
+	VkRenderPass get_render_pass();
 
 	void update_draw_state();
 
@@ -507,6 +509,9 @@ private:
 	bool load_program();
 	void load_program_env();
 	void update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_info);
+
+	void load_texture_env();
+	void bind_texture_env();
 
 public:
 	void init_buffers(rsx::framebuffer_creation_context context, bool skip_reading = false);

@@ -1,5 +1,6 @@
 ﻿#ifdef _WIN32
 #include "mm_joystick_handler.h"
+#include "Emu/Io/pad_config.h"
 
 LOG_CHANNEL(input_log, "Input");
 
@@ -176,7 +177,7 @@ std::array<u32, PadHandlerBase::button::button_count> mm_joystick_handler::get_m
 	return mapping;
 }
 
-void mm_joystick_handler::get_next_button_press(const std::string& padId, const std::function<void(u16, std::string, std::string, std::array<int, 6>)>& callback, const std::function<void(std::string)>& fail_callback, bool get_blacklist, const std::vector<std::string>& buttons)
+void mm_joystick_handler::get_next_button_press(const std::string& padId, const pad_callback& callback, const pad_fail_callback& fail_callback, bool get_blacklist, const std::vector<std::string>& buttons)
 {
 	if (get_blacklist)
 		blacklist.clear();
@@ -298,7 +299,7 @@ void mm_joystick_handler::get_next_button_press(const std::string& padId, const 
 			return static_cast<u64>(key);
 		};
 
-		std::array<int, 6> preview_values = { 0, 0, 0, 0, 0, 0 };
+		pad_preview_values preview_values = { 0, 0, 0, 0, 0, 0 };
 		if (buttons.size() == 10)
 		{
 			preview_values[0] = data[find_key(buttons[0])];
@@ -310,9 +311,9 @@ void mm_joystick_handler::get_next_button_press(const std::string& padId, const 
 		}
 
 		if (pressed_button.first > 0)
-			return callback(pressed_button.first, pressed_button.second, padId, preview_values);
+			return callback(pressed_button.first, pressed_button.second, padId, 0, preview_values);
 		else
-			return callback(0, "", padId, preview_values);
+			return callback(0, "", padId, 0, preview_values);
 
 		break;
 	}

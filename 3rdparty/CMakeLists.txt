@@ -138,9 +138,9 @@ if(CMAKE_SYSTEM MATCHES "DragonFly|FreeBSD")
 elseif(MSVC)
 	# Windows time.h defines timespec but doesn't add any flag for it, which makes libusb attempt to define it again
 	add_definitions(-DHAVE_STRUCT_TIMESPEC=1)
-	add_subdirectory(libusb EXCLUDE_FROM_ALL)
+	add_subdirectory(libusb_cmake EXCLUDE_FROM_ALL)
 else()
-	add_subdirectory(libusb EXCLUDE_FROM_ALL)
+	add_subdirectory(libusb_cmake EXCLUDE_FROM_ALL)
 endif()
 
 
@@ -337,6 +337,7 @@ if(USE_FAUDIO)
 	if (NOT SDL2_FOUND OR SDL2_VERSION VERSION_LESS 2.0.9)
 		message("-- RPCS3: FAudio requires SDL 2.0.9 or newer.")
 	else()
+		set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared library")
 		add_subdirectory(FAudio EXCLUDE_FROM_ALL)
 		target_compile_definitions(FAudio INTERFACE -DHAVE_FAUDIO)
 		set(FAUDIO_TARGET FAudio)
@@ -412,6 +413,11 @@ endif()
 # LLVM
 include(llvm.cmake)
 
+# Wolfssl
+add_subdirectory(wolfssl EXCLUDE_FROM_ALL)
+
+# Libcurl
+add_subdirectory(curl EXCLUDE_FROM_ALL)
 
 # add nice ALIAS targets for ease of use
 add_library(3rdparty::libusb ALIAS usb-1.0-static)
@@ -435,3 +441,5 @@ add_library(3rdparty::vulkan ALIAS ${VULKAN_TARGET})
 add_library(3rdparty::openal ALIAS 3rdparty_openal)
 add_library(3rdparty::ffmpeg ALIAS 3rdparty_ffmpeg)
 add_library(3rdparty::glew ALIAS 3rdparty_glew)
+add_library(3rdparty::wolfssl ALIAS wolfssl-3-static)
+add_library(3rdparty::libcurl ALIAS libcurl)

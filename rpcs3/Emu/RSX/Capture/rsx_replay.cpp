@@ -1,10 +1,8 @@
 ﻿#include "stdafx.h"
 #include "rsx_replay.h"
 
-#include "Emu/System.h"
 #include "Emu/Cell/lv2/sys_rsx.h"
 #include "Emu/Cell/lv2/sys_memory.h"
-#include "Emu/Memory/vm.h"
 #include "Emu/RSX/GSRender.h"
 
 #include <map>
@@ -244,14 +242,6 @@ namespace rsx
 
 	void rsx_replay_thread::operator()()
 	{
-		try
-		{
-			on_task();
-		}
-		catch (const std::exception& e)
-		{
-			rsx_log.fatal("%s thrown: %s", typeid(e).name(), e.what());
-			Emu.Pause();
-		}
+		on_task();
 	}
 }

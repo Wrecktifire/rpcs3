@@ -1,4 +1,5 @@
-﻿#include "pad_thread.h"
+﻿#include "stdafx.h"
+#include "pad_thread.h"
 #include "ds3_pad_handler.h"
 #include "ds4_pad_handler.h"
 #ifdef _WIN32
@@ -9,6 +10,8 @@
 #endif
 #include "keyboard_pad_handler.h"
 #include "Emu/Io/Null/NullPadHandler.h"
+#include "Emu/Io/PadHandler.h"
+#include "Emu/Io/pad_config.h"
 
 LOG_CHANNEL(input_log, "Input");
 

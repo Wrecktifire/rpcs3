@@ -5,13 +5,12 @@
 #include <condition_variable>
 #include <mutex>
 
-#include "stdafx.h"
-#include "Emu/System.h"
 #include "Utilities/Config.h"
 #include "Utilities/Thread.h"
 #include "Utilities/StrUtil.h"
 
 #include <QMessageBox>
+#include <QLineEdit>
 
 #if defined(_WIN32) || defined(HAVE_VULKAN)
 #include "Emu/RSX/VK/VKHelpers.h"
@@ -553,6 +552,23 @@ void emu_settings::EnhanceDoubleSpinBox(QDoubleSpinBox* spinbox, SettingsType ty
 	});
 }
 
+void emu_settings::EnhanceEdit(QLineEdit* edit, SettingsType type)
+{
+	if (!edit)
+	{
+		cfg_log.fatal("EnhanceEdit '%s' was used with an invalid object", GetSettingName(type));
+		return;
+	}
+
+	const std::string set_text = GetSetting(type);
+	edit->setText(qstr(set_text));
+
+	connect(edit, &QLineEdit::textChanged, [=, this](const QString &text)
+	{
+		SetSetting(type, sstr(text));
+	});
+}
+
 std::vector<std::string> emu_settings::GetLoadedLibraries()
 {
 	return m_currentSettings["Core"]["Load libraries"].as<std::vector<std::string>, std::initializer_list<std::string>>({});
@@ -591,7 +607,7 @@ void emu_settings::SetSetting(SettingsType type, const std::string& val)
 
 void emu_settings::OpenCorrectionDialog(QWidget* parent)
 {
-	if (m_broken_types.size() && QMessageBox::question(parent, tr("Fix invalid settings?"),
+	if (!m_broken_types.empty() && QMessageBox::question(parent, tr("Fix invalid settings?"),
 		tr(
 			"Your config file contained one or more unrecognized values for settings.\n"
 			"Their default value will be used until they are corrected.\n"

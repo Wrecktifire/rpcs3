@@ -1,7 +1,4 @@
 ﻿#include "stdafx.h"
-#include "Emu/Memory/vm.h"
-#include "Emu/System.h"
-#include "Emu/IdManager.h"
 #include "RSXThread.h"
 
 #include "Emu/Cell/PPUCallback.h"
@@ -15,7 +12,7 @@
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/Modules/cellGcmSys.h"
 #include "Overlays/overlay_perf_metrics.h"
-
+#include "Utilities/date_time.h"
 #include "Utilities/span.h"
 #include "Utilities/StrUtil.h"
 
@@ -31,8 +28,7 @@ class GSRender;
 
 #define CMD_DEBUG 0
 
-bool user_asked_for_frame_capture = false;
-bool capture_current_frame = false;
+std::atomic<bool> user_asked_for_frame_capture = false;
 rsx::frame_trace_data frame_debug;
 rsx::frame_capture_data frame_capture;
 
@@ -42,8 +38,6 @@ extern thread_local std::string(*g_tls_log_prefix)();
 namespace rsx
 {
 	std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
-
-	dma_manager g_dma_manager;
 
 	u32 get_address(u32 offset, u32 location, const char* from)
 	{
@@ -310,10 +304,12 @@ namespace rsx
 		};
 
 		m_rtts_dirty = true;
-		memset(m_textures_dirty, -1, sizeof(m_textures_dirty));
-		memset(m_vertex_textures_dirty, -1, sizeof(m_vertex_textures_dirty));
+		m_textures_dirty.fill(true);
+		m_vertex_textures_dirty.fill(true);
 
 		m_graphics_state = pipeline_state::all_dirty;
+
+		user_asked_for_frame_capture = false;
 
 		if (g_cfg.misc.use_native_interface && (g_cfg.video.renderer == video_renderer::opengl || g_cfg.video.renderer == video_renderer::vulkan))
 		{
@@ -426,8 +422,7 @@ namespace rsx
 
 		element_push_buffer.clear();
 
-		if (zcull_ctrl->active)
-			zcull_ctrl->on_draw();
+		zcull_ctrl->on_draw();
 
 		if (capture_current_frame)
 		{
@@ -448,7 +443,6 @@ namespace rsx
 
 	void thread::operator()()
 	{
-		try
 		{
 			// Wait for startup (TODO)
 			while (m_rsx_thread_exiting)
@@ -462,11 +456,6 @@ namespace rsx
 			}
 
 			on_task();
-		}
-		catch (const std::exception& e)
-		{
-			rsx_log.fatal("%s thrown: %s", typeid(e).name(), e.what());
-			Emu.Pause();
 		}
 
 		on_exit();
@@ -484,7 +473,7 @@ namespace rsx
 
 		rsx::overlays::reset_performance_overlay();
 
-		g_dma_manager.init();
+		g_fxo->get<rsx::dma_manager>()->init();
 		on_init_thread();
 
 		method_registers.init();
@@ -502,7 +491,7 @@ namespace rsx
 
 		vblank_count = 0;
 
-		thread_ctrl::spawn("VBlank Thread", [this]()
+		g_fxo->init<named_thread>("VBlank Thread", [this]()
 		{
 			// See sys_timer_usleep for details
 #ifdef __linux__
@@ -568,7 +557,7 @@ namespace rsx
 			}
 		});
 
-		thread_ctrl::spawn("RSX Decompiler Thread", [this]
+		g_fxo->init<named_thread>("RSX Decompiler Thread", [this]
 		{
 			if (g_cfg.video.disable_asynchronous_shader_compiler)
 			{
@@ -618,9 +607,7 @@ namespace rsx
 			// Wait for external pause events
 			if (external_interrupt_lock)
 			{
-				external_interrupt_ack.store(true);
-
-				while (external_interrupt_lock) _mm_pause();
+				wait_pause();
 			}
 
 			// Note a possible rollback address
@@ -665,11 +652,8 @@ namespace rsx
 		std::this_thread::sleep_for(10ms);
 		do_local_task(rsx::FIFO_state::lock_wait);
 
-		user_asked_for_frame_capture = false;
-		capture_current_frame = false;
-
 		m_rsx_thread_exiting = true;
-		g_dma_manager.join();
+		g_fxo->get<rsx::dma_manager>()->join();
 	}
 
 	void thread::fill_scale_offset_data(void *buffer, bool flip_y) const
@@ -1028,7 +1012,7 @@ namespace rsx
 
 		// NOTE: surface_target_a is index 1 but is not MRT since only one surface is active
 		bool color_write_enabled = false;
-		for (int i = 0; i < mrt_buffers.size(); ++i)
+		for (uint i = 0; i < mrt_buffers.size(); ++i)
 		{
 			if (rsx::method_registers.color_write_enabled(i))
 			{
@@ -1899,7 +1883,7 @@ namespace rsx
 		const s32 default_frequency_mask = (1 << 8);
 		const s32 swap_storage_mask = (1 << 29);
 		const s32 volatile_storage_mask = (1 << 30);
-		const s32 modulo_op_frequency_mask = (1 << 31);
+		const s32 modulo_op_frequency_mask = (INT32_MIN);
 
 		const u32 modulo_mask = rsx::method_registers.frequency_divider_operation_mask();
 		const auto max_index = (first_vertex + vertex_count) - 1;
@@ -2096,7 +2080,7 @@ namespace rsx
 				const u32 data_size = range.second * block.attribute_stride;
 				const u32 vertex_base = range.first * block.attribute_stride;
 
-				g_dma_manager.copy(persistent, vm::_ptr<char>(block.real_offset_address) + vertex_base, data_size);
+				g_fxo->get<rsx::dma_manager>()->copy(persistent, vm::_ptr<char>(block.real_offset_address) + vertex_base, data_size);
 				persistent += data_size;
 			}
 		}
@@ -2128,8 +2112,6 @@ namespace rsx
 		if (g_cfg.video.disable_zcull_queries)
 			return;
 
-		bool testing_enabled = zcull_pixel_cnt_enabled || zcull_stats_enabled;
-
 		if (framebuffer_swap)
 		{
 			zcull_surface_active = false;
@@ -2154,7 +2136,7 @@ namespace rsx
 		}
 
 		zcull_ctrl->set_enabled(this, zcull_rendering_enabled);
-		zcull_ctrl->set_active(this, zcull_rendering_enabled && testing_enabled && zcull_surface_active);
+		zcull_ctrl->set_status(this, zcull_surface_active, zcull_pixel_cnt_enabled, zcull_stats_enabled);
 	}
 
 	void thread::clear_zcull_stats(u32 type)
@@ -2162,7 +2144,7 @@ namespace rsx
 		if (g_cfg.video.disable_zcull_queries)
 			return;
 
-		zcull_ctrl->clear(this);
+		zcull_ctrl->clear(this, type);
 	}
 
 	void thread::get_zcull_stats(u32 type, vm::addr_t sink)
@@ -2254,7 +2236,7 @@ namespace rsx
 		m_graphics_state |= rsx::pipeline_state::fragment_constants_dirty;
 
 		// DMA sync; if you need this, don't use MTRSX
-		// g_dma_manager.sync();
+		// g_fxo->get<rsx::dma_manager>()->sync();
 
 		//TODO: On sync every sub-unit should finish any pending tasks
 		//Might cause zcull lockup due to zombie 'unclaimed reports' which are not forcefully removed currently
@@ -2274,6 +2256,23 @@ namespace rsx
 
 	void thread::recover_fifo()
 	{
+		const u64 current_time = get_system_time();
+
+		if (recovered_fifo_cmds_history.size() == 9u)
+		{
+			const auto cmd_info = recovered_fifo_cmds_history.front();
+
+			// Check timestamp of last tracked cmd
+			if (current_time - cmd_info.timestamp < 1'500'000u)
+			{
+				// Probably hopeless
+				fmt::throw_exception("Dead FIFO commands queue state has been detected!\nTry increasing \"Driver Wake-Up Delay\" setting in Advanced settings." HERE);
+			}
+
+			// Erase the last command from history, keep the size of the queue the same
+			recovered_fifo_cmds_history.pop();
+		}
+
 		// Error. Should reset the queue
 		fifo_ctrl->set_get(restore_point);
 		fifo_ret_addr = saved_fifo_ret;
@@ -2285,6 +2284,8 @@ namespace rsx
 			execute_nop_draw();
 			rsx::thread::end();
 		}
+
+		recovered_fifo_cmds_history.push({fifo_ctrl->last_cmd(), current_time});
 	}
 
 	void thread::fifo_wake_delay(u64 div)
@@ -2342,7 +2343,7 @@ namespace rsx
 		}
 	}
 
-	u32 thread::get_fifo_cmd()
+	u32 thread::get_fifo_cmd() const
 	{
 		// Last fifo cmd for logging and utility
 		return fifo_ctrl->last_cmd();
@@ -2471,10 +2472,7 @@ namespace rsx
 	//Pause/cont wrappers for FIFO ctrl. Never call this from rsx thread itself!
 	void thread::pause()
 	{
-		while (external_interrupt_lock.exchange(true)) [[unlikely]]
-		{
-			_mm_pause();
-		}
+		external_interrupt_lock++;
 
 		while (!external_interrupt_ack)
 		{
@@ -2483,14 +2481,34 @@ namespace rsx
 
 			_mm_pause();
 		}
-
-		external_interrupt_ack.store(false);
 	}
 
 	void thread::unpause()
 	{
 		// TODO: Clean this shit up
-		external_interrupt_lock.store(false);
+		external_interrupt_lock--;
+	}
+
+	void thread::wait_pause()
+	{
+		do
+		{
+			if (g_cfg.video.multithreaded_rsx)
+			{
+				g_fxo->get<rsx::dma_manager>()->sync();
+			}
+
+			external_interrupt_ack.store(true);
+
+			while (external_interrupt_lock)
+			{
+				// TODO: Investigate non busy-spinning method
+				_mm_pause();
+			}
+
+			external_interrupt_ack.store(false);
+		}
+		while (external_interrupt_lock);
 	}
 
 	u32 thread::get_load()
@@ -2518,10 +2536,9 @@ namespace rsx
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
 		// Marks the end of a frame scope GPU-side
-		if (user_asked_for_frame_capture && !capture_current_frame)
+		if (user_asked_for_frame_capture.exchange(false) && !capture_current_frame)
 		{
 			capture_current_frame = true;
-			user_asked_for_frame_capture = false;
 			frame_debug.reset();
 			frame_capture.reset();
 
@@ -2553,11 +2570,14 @@ namespace rsx
 			Emu.Pause();
 		}
 
-		// Reset ZCULL ctrl
-		// NOTE: A semaphore release is part of RSX flip control and will handle ZCULL sync
-		// TODO: These routines belong in the state reset routines controlled by sys_rsx and cellGcmSetFlip
-		zcull_ctrl->set_active(this, false, true);
-		zcull_ctrl->clear(this);
+		if (zcull_ctrl->has_pending())
+		{
+			// NOTE: This is a workaround for buggy games.
+			// Some applications leave the zpass/stats gathering active but don't use the information.
+			// This can lead to the zcull unit using up all the memory queueing up operations that never get consumed.
+			// Seen in Diablo III and Yakuza 5
+			zcull_ctrl->clear(this, CELL_GCM_ZPASS_PIXEL_CNT | CELL_GCM_ZCULL_STATS);
+		}
 
 		// Save current state
 		m_queued_flip.stats = m_frame_stats;
@@ -2644,33 +2664,38 @@ namespace rsx
 		case frame_limit_type::_50: limit = 50.; break;
 		case frame_limit_type::_60: limit = 60.; break;
 		case frame_limit_type::_30: limit = 30.; break;
-		case frame_limit_type::_auto: limit = fps_limit; break; // TODO
+		case frame_limit_type::_auto: limit = static_cast<double>(g_cfg.video.vblank_rate); break;
 		default:
 			break;
 		}
 
 		if (limit)
 		{
-			const u64 time = get_system_time() - Emu.GetPauseTime() - start_rsx_time;
+			const u64 time = get_system_time() - Emu.GetPauseTime();
+			const u64 needed_us = static_cast<u64>(1000000 / limit);
 
 			if (int_flip_index == 0)
 			{
-				start_rsx_time = time;
+				target_rsx_flip_time = time;
 			}
 			else
 			{
-				// Convert limit to expected time value
-				double expected = int_flip_index * 1000000. / limit;
-
-				while (time >= expected + 1000000. / limit)
+				do
 				{
-					expected = int_flip_index++ * 1000000. / limit;
+					target_rsx_flip_time += needed_us;
 				}
+				while (time >= target_rsx_flip_time + needed_us);
 
-				if (expected > time + 1000)
+				if (target_rsx_flip_time > time + 1000)
 				{
-					const auto delay_us = static_cast<s64>(expected - time);
-					std::this_thread::sleep_for(std::chrono::milliseconds{ delay_us / 1000 });
+					const auto delay_us = target_rsx_flip_time - time;
+					lv2_obj::wait_timeout<false, false>(delay_us);
+
+					if (thread_ctrl::state() == thread_state::aborting)
+					{
+						return;
+					}
+
 					performance_counters.idle_time += delay_us;
 				}
 			}
@@ -2688,6 +2713,12 @@ namespace rsx
 		flip_status = CELL_GCM_DISPLAY_FLIP_STATUS_DONE;
 		m_queued_flip.in_progress = false;
 
+		if (!isHLE)
+		{
+			sys_rsx_context_attribute(0x55555555, 0xFEC, buffer, 0, 0, 0);
+			return;
+		}
+
 		if (flip_handler)
 		{
 			intr_thread->cmd_list
@@ -2699,8 +2730,6 @@ namespace rsx
 
 			thread_ctrl::notify(*intr_thread);
 		}
-
-		sys_rsx_context_attribute(0x55555555, 0xFEC, buffer, 0, 0, 0);
 	}
 
 
@@ -2717,26 +2746,15 @@ namespace rsx
 		ZCULL_control::~ZCULL_control()
 		{}
 
-		void ZCULL_control::set_enabled(class ::rsx::thread* ptimer, bool state, bool flush_queue)
-		{
-			if (state != enabled)
-			{
-				enabled = state;
-
-				if (active && !enabled)
-					set_active(ptimer, false, flush_queue);
-			}
-		}
-
 		void ZCULL_control::set_active(class ::rsx::thread* ptimer, bool state, bool flush_queue)
 		{
-			if (state != active)
+			if (state != host_queries_active)
 			{
-				active = state;
+				host_queries_active = state;
 
 				if (state)
 				{
-					verify(HERE), enabled && m_current_task == nullptr;
+					verify(HERE), unit_enabled && m_current_task == nullptr;
 					allocate_new_query(ptimer);
 					begin_occlusion_query(m_current_task);
 				}
@@ -2764,6 +2782,59 @@ namespace rsx
 
 					m_current_task = nullptr;
 					update(ptimer, 0u, flush_queue);
+				}
+			}
+		}
+
+		void ZCULL_control::check_state(class ::rsx::thread* ptimer, bool flush_queue)
+		{
+			// NOTE: Only enable host queries if pixel count is active to save on resources
+			// Can optionally be enabled for either stats enabled or zpass enabled for accuracy
+			const bool data_stream_available = write_enabled && (zpass_count_enabled /*|| stats_enabled*/);
+			if (host_queries_active && !data_stream_available)
+			{
+				// Stop
+				set_active(ptimer, false, flush_queue);
+			}
+			else if (!host_queries_active && data_stream_available && unit_enabled)
+			{
+				// Start
+				set_active(ptimer, true, flush_queue);
+			}
+		}
+
+		void ZCULL_control::set_enabled(class ::rsx::thread* ptimer, bool state, bool flush_queue)
+		{
+			if (state != unit_enabled)
+			{
+				unit_enabled = state;
+				check_state(ptimer, flush_queue);
+			}
+		}
+
+		void ZCULL_control::set_status(class ::rsx::thread* ptimer, bool surface_active, bool zpass_active, bool zcull_stats_active, bool flush_queue)
+		{
+			write_enabled = surface_active;
+			zpass_count_enabled = zpass_active;
+			stats_enabled = zcull_stats_active;
+
+			check_state(ptimer, flush_queue);
+
+			// Disabled since only ZPASS is implemented right now
+			if (false) //(m_current_task && m_current_task->active)
+			{
+				// Data check
+				u32 expected_type = 0;
+				if (zpass_active) expected_type |= CELL_GCM_ZPASS_PIXEL_CNT;
+				if (zcull_stats_active) expected_type |= CELL_GCM_ZCULL_STATS;
+
+				if (m_current_task->data_type != expected_type) [[unlikely]]
+				{
+					rsx_log.error("ZCULL queue interrupted by data type change!");
+
+					// Stop+start the current setup
+					set_active(ptimer, false, false);
+					set_active(ptimer, true, false);
 				}
 			}
 		}
@@ -2844,12 +2915,18 @@ namespace rsx
 					m_current_task = m_free_occlusion_pool.top();
 					m_free_occlusion_pool.pop();
 
+					m_current_task->data_type = 0;
 					m_current_task->num_draws = 0;
 					m_current_task->result = 0;
 					m_current_task->active = true;
 					m_current_task->owned = false;
 					m_current_task->sync_tag = 0;
 					m_current_task->timestamp = 0;
+
+					// Flags determine what kind of payload is carried by queries in the 'report'
+					if (zpass_count_enabled) m_current_task->data_type |= CELL_GCM_ZPASS_PIXEL_CNT;
+					if (stats_enabled) m_current_task->data_type |= CELL_GCM_ZCULL_STATS;
+
 					return;
 				}
 
@@ -2879,8 +2956,14 @@ namespace rsx
 			m_free_occlusion_pool.push(query);
 		}
 
-		void ZCULL_control::clear(class ::rsx::thread* ptimer)
+		void ZCULL_control::clear(class ::rsx::thread* ptimer, u32 type)
 		{
+			if (!(type & CELL_GCM_ZPASS_PIXEL_CNT))
+			{
+				// Other types do not generate queries at the moment
+				return;
+			}
+
 			if (!m_pending_writes.empty())
 			{
 				//Remove any dangling/unclaimed queries as the information is lost anyway
@@ -2977,7 +3060,7 @@ namespace rsx
 				u32 processed = 0;
 				const bool has_unclaimed = (m_pending_writes.back().sink == 0);
 
-				//Write all claimed reports unconditionally
+				// Write all claimed reports unconditionally
 				for (auto &writer : m_pending_writes)
 				{
 					if (!writer.sink)
@@ -2998,7 +3081,10 @@ namespace rsx
 							if (query->result)
 							{
 								result += query->result;
-								m_statistics_map[writer.counter_tag] = result;
+								if (query->data_type & CELL_GCM_ZPASS_PIXEL_CNT)
+								{
+									m_statistics_map[writer.counter_tag] += query->result;
+								}
 							}
 						}
 						else
@@ -3013,7 +3099,8 @@ namespace rsx
 					if (!writer.forwarder)
 					{
 						// No other queries in the chain, write result
-						write(&writer, ptimer->timestamp(), result);
+						const auto value = (writer.type == CELL_GCM_ZPASS_PIXEL_CNT) ? m_statistics_map[writer.counter_tag] : result;
+						write(&writer, ptimer->timestamp(), value);
 
 						if (query && query->sync_tag == ptimer->cond_render_ctrl.eval_sync_tag)
 						{
@@ -3077,7 +3164,7 @@ namespace rsx
 
 			if (!sync_address)
 			{
-				if (hint || ptimer->async_tasks_pending >= max_safe_queue_depth)
+				if (hint || ptimer->async_tasks_pending + 0u >= max_safe_queue_depth)
 				{
 					// Prepare the whole queue for reading. This happens when zcull activity is disabled or queue is too long
 					for (auto It = m_pending_writes.rbegin(); It != m_pending_writes.rend(); ++It)
@@ -3160,7 +3247,10 @@ namespace rsx
 							if (query->result)
 							{
 								result += query->result;
-								m_statistics_map[writer.counter_tag] = result;
+								if (query->data_type & CELL_GCM_ZPASS_PIXEL_CNT)
+								{
+									m_statistics_map[writer.counter_tag] += query->result;
+								}
 							}
 						}
 						else
@@ -3180,7 +3270,10 @@ namespace rsx
 								if (query->result)
 								{
 									result += query->result;
-									m_statistics_map[writer.counter_tag] = result;
+									if (query->data_type & CELL_GCM_ZPASS_PIXEL_CNT)
+									{
+										m_statistics_map[writer.counter_tag] += query->result;
+									}
 								}
 							}
 							else
@@ -3201,11 +3294,11 @@ namespace rsx
 
 				stat_tag_to_remove = writer.counter_tag;
 
-				// only zpass supported right now
 				if (!writer.forwarder)
 				{
 					// No other queries in the chain, write result
-					write(&writer, ptimer->timestamp(), result);
+					const auto value = (writer.type == CELL_GCM_ZPASS_PIXEL_CNT) ? m_statistics_map[writer.counter_tag] : result;
+					write(&writer, ptimer->timestamp(), value);
 
 					if (query && query->sync_tag == ptimer->cond_render_ctrl.eval_sync_tag)
 					{
@@ -3248,6 +3341,9 @@ namespace rsx
 				return result_none;
 
 			const auto memory_end = memory_address + memory_range;
+
+			AUDIT(memory_end >= memory_address);
+
 			u32 sync_address = 0;
 			occlusion_query_info* query = nullptr;
 
@@ -3438,7 +3534,7 @@ namespace rsx
 		void conditional_render_eval::eval_result(::rsx::thread* pthr)
 		{
 			vm::ptr<CellGcmReportData> result = vm::cast(eval_address);
-			const bool failed = (result->value == 0);
+			const bool failed = (result->value == 0u);
 			set_eval_result(pthr, failed);
 		}
 	}

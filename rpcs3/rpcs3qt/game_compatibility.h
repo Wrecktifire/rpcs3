@@ -3,17 +3,11 @@
 #include <memory>
 
 #include <QPainter>
-#include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QTableWidget>
-#include <QTimer>
 
-#include "gui_settings.h"
-#include "progress_dialog.h"
+class curl_handle;
+class gui_settings;
+class progress_dialog;
 
 struct compat_status
 {
@@ -22,7 +16,7 @@ struct compat_status
 	QString color;
 	QString text;
 	QString tooltip;
-	QString version;
+	QString latest_version;
 };
 
 class game_compatibility : public QObject
@@ -43,12 +37,14 @@ private:
 	};
 	int m_timer_count = 0;
 	QString m_filepath;
-	QString m_url;
-	QNetworkRequest m_network_request;
+	std::string m_url;
+	std::atomic<bool> m_curl_result = false;
+	std::atomic<bool> m_curl_abort = false;
+	double m_actual_dwnld_size = -1.0;
+	curl_handle* m_curl = nullptr;
+	QByteArray m_curl_buf;
 	progress_dialog* m_progress_dialog = nullptr;
 	std::shared_ptr<gui_settings> m_xgui_settings;
-	std::unique_ptr<QTimer> m_progress_timer;
-	std::unique_ptr<QNetworkAccessManager> m_network_access_manager;
 	std::map<std::string, compat_status> m_compat_database;
 
 	/** Creates new map from the database */
@@ -67,10 +63,16 @@ public:
 	/** Returns the data for the requested status */
 	compat_status GetStatusData(const QString& status);
 
+	size_t update_buffer(char* data, size_t size);
+
 Q_SIGNALS:
 	void DownloadStarted();
 	void DownloadFinished();
 	void DownloadError(const QString& error);
+	void signal_buffer_update(int size, int max);
+
+private Q_SLOTS:
+	void handle_buffer_update(int size, int max);
 };
 
 class compat_pixmap : public QPixmap

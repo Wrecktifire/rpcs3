@@ -1,4 +1,4 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "key_vault.h"
 #include "unedat.h"
 
@@ -324,7 +324,7 @@ int decrypt_data(const fs::file* in, const fs::file* out, EDAT_HEADER *edat, NPD
 		in->seek(0);
 		memset(data.get(), 0, edat->block_size);
 		u64 res = decrypt_block(in, data.get(), edat, npd, crypt_key, i, total_blocks, size_left);
-		if (res == -1)
+		if (res == umax)
 		{
 			edat_log.error("EDAT: Decrypt Block failed!");
 			return 1;
@@ -578,7 +578,7 @@ int validate_npd_hashes(const char* file_name, const u8* klicensee, NPD_HEADER *
 	int title_hash_result = 0;
 	int dev_hash_result = 0;
 
-	const auto file_name_length = std::strlen(file_name);
+	const s32 file_name_length = ::narrow<s32>(std::strlen(file_name), HERE);
 	std::unique_ptr<u8[]> buf(new u8[0x30 + file_name_length]);
 
 	// Build the title buffer (content_id + file_name).
@@ -861,7 +861,7 @@ fs::file DecryptEDAT(const fs::file& input, const std::string& input_file_name, 
 	}
 
 	// Read the RAP file, if provided.
-	if (rap_file_name.size())
+	if (!rap_file_name.empty())
 	{
 		fs::file rap(rap_file_name);
 
@@ -966,7 +966,7 @@ u64 EDATADecrypter::ReadData(u64 pos, u8* data, u64 size)
 	{
 		edata_file.seek(0);
 		u64 res = decrypt_block(&edata_file, &data_buf[writeOffset], &edatHeader, &npdHeader, dec_key.data(), i, total_blocks, edatHeader.file_size);
-		if (res == -1)
+		if (res == umax)
 		{
 			edat_log.error("Error Decrypting data");
 			return 0;

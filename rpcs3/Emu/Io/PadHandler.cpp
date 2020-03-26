@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "PadHandler.h"
+#include "Emu/System.h"
 #include "Input/pad_thread.h"
 
 cfg_input g_cfg_input;
@@ -178,22 +179,24 @@ std::tuple<u16, u16> PadHandlerBase::NormalizeStickDeadzone(s32 inX, s32 inY, u3
 
 	if (dzRange > 0.f)
 	{
-		const float mag = std::min(sqrtf(X*X + Y*Y), 1.f);
+		const float mag = std::min(sqrtf(X * X + Y * Y), 1.f);
 
 		if (mag <= 0)
 		{
 			return std::tuple<u16, u16>(ConvertAxis(X), ConvertAxis(Y));
 		}
 
-		if (mag > dzRange) {
-			float pos = lerp(0.13f, 1.f, (mag - dzRange) / (1 - dzRange));
-			float scale = pos / mag;
+		if (mag > dzRange)
+		{
+			const float pos = std::lerp(0.13f, 1.f, (mag - dzRange) / (1 - dzRange));
+			const float scale = pos / mag;
 			X = X * scale;
 			Y = Y * scale;
 		}
-		else {
-			float pos = lerp(0.f, 0.13f, mag / dzRange);
-			float scale = pos / mag;
+		else
+		{
+			const float pos = std::lerp(0.f, 0.13f, mag / dzRange);
+			const float scale = pos / mag;
 			X = X * scale;
 			Y = Y * scale;
 		}
@@ -243,34 +246,39 @@ std::tuple<u16, u16> PadHandlerBase::ConvertToSquirclePoint(u16 inX, u16 inY, in
 	return std::tuple<u16, u16>(newX, newY);
 }
 
-std::string PadHandlerBase::name_string()
+std::string PadHandlerBase::name_string() const
 {
 	return m_name_string;
 }
 
-size_t PadHandlerBase::max_devices()
+size_t PadHandlerBase::max_devices() const
 {
 	return m_max_devices;
 }
 
-bool PadHandlerBase::has_config()
+bool PadHandlerBase::has_config() const
 {
 	return b_has_config;
 }
 
-bool PadHandlerBase::has_rumble()
+bool PadHandlerBase::has_rumble() const
 {
 	return b_has_rumble;
 }
 
-bool PadHandlerBase::has_deadzones()
+bool PadHandlerBase::has_deadzones() const
 {
 	return b_has_deadzones;
 }
 
-bool PadHandlerBase::has_led()
+bool PadHandlerBase::has_led() const
 {
 	return b_has_led;
+}
+
+bool PadHandlerBase::has_battery() const
+{
+	return b_has_battery;
 }
 
 std::string PadHandlerBase::get_config_dir(pad_handler type, const std::string& title_id)
@@ -299,7 +307,7 @@ void PadHandlerBase::init_configs()
 {
 	int index = 0;
 
-	for (int i = 0; i < MAX_GAMEPADS; i++)
+	for (u32 i = 0; i < MAX_GAMEPADS; i++)
 	{
 		if (g_cfg_input.player[i]->handler == m_type)
 		{
@@ -309,7 +317,7 @@ void PadHandlerBase::init_configs()
 	}
 }
 
-void PadHandlerBase::get_next_button_press(const std::string& pad_id, const std::function<void(u16, std::string, std::string, std::array<int, 6>)>& callback, const std::function<void(std::string)>& fail_callback, bool get_blacklist, const std::vector<std::string>& /*buttons*/)
+void PadHandlerBase::get_next_button_press(const std::string& pad_id, const pad_callback& callback, const pad_fail_callback& fail_callback, bool get_blacklist, const std::vector<std::string>& /*buttons*/)
 {
 	if (get_blacklist)
 		blacklist.clear();
@@ -331,8 +339,8 @@ void PadHandlerBase::get_next_button_press(const std::string& pad_id, const std:
 	std::pair<u16, std::string> pressed_button = { 0, "" };
 	for (const auto& button : button_list)
 	{
-		u32 keycode = button.first;
-		u16 value = data[keycode];
+		const u32 keycode = button.first;
+		const u16 value = data[keycode];
 
 		if (!get_blacklist && std::find(blacklist.begin(), blacklist.end(), keycode) != blacklist.end())
 			continue;
@@ -361,11 +369,12 @@ void PadHandlerBase::get_next_button_press(const std::string& pad_id, const std:
 	}
 
 	const auto preview_values = get_preview_values(data);
+	const auto battery_level = get_battery_level(pad_id);
 
 	if (pressed_button.first > 0)
-		return callback(pressed_button.first, pressed_button.second, pad_id, preview_values);
+		return callback(pressed_button.first, pressed_button.second, pad_id, battery_level, preview_values);
 	else
-		return callback(0, "", pad_id, preview_values);
+		return callback(0, "", pad_id, battery_level, preview_values);
 
 	return;
 }

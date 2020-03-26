@@ -3,18 +3,17 @@
 #include "table_item_delegate.h"
 #include "qt_utils.h"
 #include "game_list.h"
+#include "gui_settings.h"
 
 #include "stdafx.h"
 
-#include "Utilities/Log.h"
+#include "util/logs.hpp"
 #include "Utilities/StrUtil.h"
-#include "rpcs3/Emu/VFS.h"
+#include "Emu/VFS.h"
 #include "Emu/System.h"
-
-#include "Emu/Memory/vm.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 
-#include "yaml-cpp/yaml.h"
+#include "Loader/TROPUSR.h"
 
 #include <QtConcurrent>
 #include <QFutureWatcher>
@@ -23,10 +22,8 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QPixmap>
-#include <QDesktopWidget>
 #include <QDir>
 #include <QMenu>
-#include <QDirIterator>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QScrollBar>
@@ -596,7 +593,7 @@ void trophy_manager_dialog::ApplyFilter()
 		return;
 
 	const int db_pos = m_game_combo->currentData().toInt();
-	if (db_pos >= m_trophies_db.size() || !m_trophies_db[db_pos])
+	if (db_pos + 0u >= m_trophies_db.size() || !m_trophies_db[db_pos])
 		return;
 
 	const auto trop_usr = m_trophies_db[db_pos]->trop_usr.get();
@@ -713,15 +710,12 @@ void trophy_manager_dialog::StartTrophyLoadThreads()
 	{
 		const std::string dir_name = sstr(folder_list.value(i));
 		gui_log.trace("Loading trophy dir: %s", dir_name);
-		try
-		{
-			LoadTrophyFolderToDB(dir_name);
-		}
-		catch (const std::exception& e)
+
+		if (!LoadTrophyFolderToDB(dir_name))
 		{
 			// TODO: Add error checks & throws to LoadTrophyFolderToDB so that they can be caught here.
 			// Also add a way of showing the number of corrupted/invalid folders in UI somewhere.
-			gui_log.error("Exception occurred while parsing folder %s for trophies: %s", dir_name, e.what());
+			gui_log.error("Error occurred while parsing folder %s for trophies.", dir_name);
 		}
 	}));
 

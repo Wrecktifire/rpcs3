@@ -133,16 +133,16 @@ struct sys_spu_image
 
 		for (const auto& phdr : phdrs)
 		{
-			if (phdr.p_type != 1 && phdr.p_type != 4)
+			if (phdr.p_type != 1u && phdr.p_type != 4u)
 			{
 				return -1;
 			}
 
-			if (phdr.p_type == 1 && phdr.p_filesz != phdr.p_memsz && phdr.p_filesz)
+			if (phdr.p_type == 1u && phdr.p_filesz != phdr.p_memsz && phdr.p_filesz)
 			{
 				num_segs += 2;
 			}
-			else if (phdr.p_type == 1 || CountInfo)
+			else if (phdr.p_type == 1u || CountInfo)
 			{
 				num_segs += 1;
 			}
@@ -158,7 +158,7 @@ struct sys_spu_image
 
 		for (const auto& phdr : phdrs)
 		{
-			if (phdr.p_type == 1)
+			if (phdr.p_type == 1u)
 			{
 				if (phdr.p_filesz)
 				{
@@ -188,7 +188,7 @@ struct sys_spu_image
 					seg->addr = 0;
 				}
 			}
-			else if (WriteInfo && phdr.p_type == 4)
+			else if (WriteInfo && phdr.p_type == 4u)
 			{
 				if (num_segs >= nsegs)
 				{
@@ -200,7 +200,7 @@ struct sys_spu_image
 				seg->size = 0x20;
 				seg->addr = static_cast<u32>(phdr.p_offset + 0x14 + src);
 			}
-			else if (phdr.p_type != 4)
+			else if (phdr.p_type != 4u)
 			{
 				return -1;
 			}
@@ -225,11 +225,23 @@ struct lv2_spu_image : lv2_obj
 	static const u32 id_base = 0x22000000;
 
 	const u32 e_entry;
+	const vm::ptr<sys_spu_segment> segs;
+	const s32 nsegs;
 
-	lv2_spu_image(u32 entry)
+	lv2_spu_image(u32 entry, vm::ptr<sys_spu_segment> segs, s32 nsegs)
 		: e_entry(entry)
+		, segs(segs)
+		, nsegs(nsegs)
 	{
 	}
+};
+
+struct sys_spu_thread_group_syscall_253_info
+{
+	be_t<u32> deadlineMeetCounter; // From cellSpursGetInfo
+	be_t<u32> deadlineMissCounter; // Same
+	be_t<u64> timestamp;
+	be_t<u64> _x10[6];
 };
 
 struct lv2_spu_group
@@ -269,16 +281,16 @@ struct lv2_spu_group
 	std::weak_ptr<lv2_event_queue> ep_sysmodule; // TODO: SYS_SPU_THREAD_GROUP_EVENT_SYSTEM_MODULE
 
 	lv2_spu_group(std::string name, u32 num, s32 prio, s32 type, lv2_memory_container* ct, bool uses_scheduler, u32 mem_size)
-		: id(idm::last_id())
-		, name(name)
+		: name(std::move(name))
+		, id(idm::last_id())
 		, max_num(num)
-		, max_run(num)
 		, mem_size(mem_size)
-		, init(0)
-		, prio(prio)
 		, type(type)
 		, ct(ct)
 		, has_scheduler_context(uses_scheduler)
+		, max_run(num)
+		, init(0)
+		, prio(prio)
 		, run_state(SPU_THREAD_GROUP_STATUS_NOT_INITIALIZED)
 		, exit_status(0)
 		, join_state(0)
@@ -341,6 +353,8 @@ error_code sys_spu_thread_group_connect_event(ppu_thread&, u32 id, u32 eq, u32 e
 error_code sys_spu_thread_group_disconnect_event(ppu_thread&, u32 id, u32 et);
 error_code sys_spu_thread_group_connect_event_all_threads(ppu_thread&, u32 id, u32 eq_id, u64 req, vm::ptr<u8> spup);
 error_code sys_spu_thread_group_disconnect_event_all_threads(ppu_thread&, u32 id, u8 spup);
+error_code sys_spu_thread_group_set_cooperative_victims(ppu_thread&, u32 id, u32 threads_mask);
+error_code sys_spu_thread_group_syscall_253(ppu_thread& ppu, u32 id, vm::ptr<sys_spu_thread_group_syscall_253_info> info);
 error_code sys_spu_thread_group_log(ppu_thread&, s32 command, vm::ptr<s32> stat);
 error_code sys_spu_thread_write_ls(ppu_thread&, u32 id, u32 address, u64 value, u32 type);
 error_code sys_spu_thread_read_ls(ppu_thread&, u32 id, u32 address, vm::ptr<u64> value, u32 type);

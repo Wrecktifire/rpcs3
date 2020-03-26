@@ -1,5 +1,4 @@
-#include "stdafx.h"
-#include "Emu/System.h"
+﻿#include "stdafx.h"
 #include "Emu/Cell/PPUModule.h"
 
 #include "sysPrxForUser.h"
@@ -29,7 +28,7 @@ error_code sys_spinlock_lock(ppu_thread& ppu, vm::ptr<atomic_be_t<u32>> lock)
 		}
 	}
 
-	return not_an_error(ppu.gpr[3]);
+	return CELL_OK;
 }
 
 s32 sys_spinlock_trylock(vm::ptr<atomic_be_t<u32>> lock)

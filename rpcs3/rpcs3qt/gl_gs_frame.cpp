@@ -1,13 +1,11 @@
-#include "stdafx.h"
+﻿#include "stdafx.h"
 #include "gl_gs_frame.h"
-#include "Emu/System.h"
 
 #include <QOpenGLContext>
-#include <qoffscreensurface.h>
-#include <QWindow>
+#include <QOffscreenSurface>
 
 gl_gs_frame::gl_gs_frame(const QRect& geometry, const QIcon& appIcon, const std::shared_ptr<gui_settings>& gui_settings)
-	: gs_frame("OpenGL", geometry, appIcon, gui_settings)
+	: gs_frame(geometry, appIcon, gui_settings)
 {
 	setSurfaceType(QSurface::OpenGLSurface);
 

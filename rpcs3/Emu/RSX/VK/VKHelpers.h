@@ -16,7 +16,6 @@
 #endif
 
 #include "Emu/RSX/GSRender.h"
-#include "Emu/System.h"
 #include "VulkanAPI.h"
 #include "VKCommonDecompiler.h"
 #include "../GCM.h"
@@ -116,6 +115,7 @@ namespace vk
 	struct gpu_formats_support;
 	struct fence;
 	struct pipeline_binding_table;
+	class event;
 
 	const vk::context *get_current_thread_ctx();
 	void set_current_thread_ctx(const vk::context &ctx);
@@ -142,7 +142,7 @@ namespace vk
 	VkImageAspectFlags get_aspect_flags(VkFormat format);
 
 	VkSampler null_sampler();
-	image_view* null_image_view(vk::command_buffer&);
+	image_view* null_image_view(vk::command_buffer&, VkImageViewType type);
 	image* get_typeless_helper(VkFormat format, u32 requested_width, u32 requested_height);
 	buffer* get_scratch_buffer(u32 min_required_size = 0);
 	data_heap* get_upload_heap();
@@ -209,6 +209,10 @@ namespace vk
 		VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage, VkAccessFlags src_mask, VkAccessFlags dst_mask,
 		const VkImageSubresourceRange& range);
 
+	void insert_execution_barrier(VkCommandBuffer cmd,
+		VkPipelineStageFlags src_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+		VkPipelineStageFlags dst_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+
 	void raise_status_interrupt(runtime_state status);
 	void clear_status_interrupt(runtime_state status);
 	bool test_status_interrupt(runtime_state status);
@@ -224,7 +228,7 @@ namespace vk
 	// Fence reset with driver workarounds in place
 	void reset_fence(fence* pFence);
 	VkResult wait_for_fence(fence* pFence, u64 timeout = 0ull);
-	VkResult wait_for_event(VkEvent pEvent, u64 timeout = 0ull);
+	VkResult wait_for_event(event* pEvent, u64 timeout = 0ull);
 
 	// Handle unexpected submit with dangling occlusion query
 	// TODO: Move queries out of the renderer!
@@ -623,7 +627,7 @@ private:
 			rsx_log.notice("Found vulkan-compatible GPU: '%s' running on driver %s", get_name(), get_driver_version());
 
 			if (get_driver_vendor() == driver_vendor::RADV &&
-				get_name().find("LLVM 8.0.0") != std::string::npos)
+				get_name().find("LLVM 8.0.0") != umax)
 			{
 				// Serious driver bug causing black screens
 				// See https://bugs.freedesktop.org/show_bug.cgi?id=110970
@@ -647,22 +651,22 @@ private:
 			if (!driver_properties.driverID)
 			{
 				const auto gpu_name = get_name();
-				if (gpu_name.find("Radeon") != std::string::npos)
+				if (gpu_name.find("Radeon") != umax)
 				{
 					return driver_vendor::AMD;
 				}
 
-				if (gpu_name.find("NVIDIA") != std::string::npos || gpu_name.find("GeForce") != std::string::npos)
+				if (gpu_name.find("NVIDIA") != umax || gpu_name.find("GeForce") != umax)
 				{
 					return driver_vendor::NVIDIA;
 				}
 
-				if (gpu_name.find("RADV") != std::string::npos)
+				if (gpu_name.find("RADV") != umax)
 				{
 					return driver_vendor::RADV;
 				}
 
-				if (gpu_name.find("Intel") != std::string::npos)
+				if (gpu_name.find("Intel") != umax)
 				{
 					return driver_vendor::INTEL;
 				}
@@ -1323,7 +1327,8 @@ private:
 			VkImageTiling tiling,
 			VkImageUsageFlags usage,
 			VkImageCreateFlags image_flags)
-			: m_device(dev), current_layout(initial_layout)
+			: current_layout(initial_layout)
+			, m_device(dev)
 		{
 			info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 			info.imageType = image_type;
@@ -1385,6 +1390,11 @@ private:
 		u32 mipmaps() const
 		{
 			return info.mipLevels;
+		}
+
+		u32 layers() const
+		{
+			return info.arrayLayers;
 		}
 
 		u8 samples() const
@@ -1449,14 +1459,16 @@ private:
 		}
 
 		image_view(VkDevice dev, VkImageViewCreateInfo create_info)
-			: m_device(dev), info(create_info)
+			: info(create_info)
+			, m_device(dev)
 		{
 			create_impl();
 		}
 
 		image_view(VkDevice dev, vk::image* resource,
-			const VkComponentMapping mapping = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A },
-			const VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1})
+			VkImageViewType view_type = VK_IMAGE_VIEW_TYPE_MAX_ENUM,
+			const VkComponentMapping& mapping = { VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A },
+			const VkImageSubresourceRange& range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1})
 			: m_device(dev), m_resource(resource)
 		{
 			info.format = resource->info.format;
@@ -1465,23 +1477,34 @@ private:
 			info.components = mapping;
 			info.subresourceRange = range;
 
-			switch (resource->info.imageType)
+			if (view_type == VK_IMAGE_VIEW_TYPE_MAX_ENUM)
 			{
-			case VK_IMAGE_TYPE_1D:
-				info.viewType = VK_IMAGE_VIEW_TYPE_1D;
-				break;
-			case VK_IMAGE_TYPE_2D:
-				if (resource->info.flags == VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
-					info.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
-				else
-					info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-				break;
-			case VK_IMAGE_TYPE_3D:
-				info.viewType = VK_IMAGE_VIEW_TYPE_3D;
-				break;
-			default:
-				ASSUME(0);
-				break;
+				switch (resource->info.imageType)
+				{
+				case VK_IMAGE_TYPE_1D:
+					info.viewType = VK_IMAGE_VIEW_TYPE_1D;
+					break;
+				case VK_IMAGE_TYPE_2D:
+					if (resource->info.flags == VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT)
+						info.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+					else if (resource->info.arrayLayers == 1)
+						info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+					else
+						info.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+					break;
+				case VK_IMAGE_TYPE_3D:
+					info.viewType = VK_IMAGE_VIEW_TYPE_3D;
+					break;
+				default:
+					ASSUME(0);
+					break;
+				}
+
+				info.subresourceRange.layerCount = resource->info.arrayLayers;
+			}
+			else
+			{
+				info.viewType = view_type;
 			}
 
 			create_impl();
@@ -1587,7 +1610,7 @@ private:
 			const auto range = vk::get_image_subresource_range(0, 0, info.arrayLayers, info.mipLevels, aspect() & mask);
 
 			verify(HERE), range.aspectMask;
-			auto view = std::make_unique<vk::image_view>(*get_current_renderer(), this, real_mapping, range);
+			auto view = std::make_unique<vk::image_view>(*get_current_renderer(), this, VK_IMAGE_VIEW_TYPE_MAX_ENUM, real_mapping, range);
 
 			auto result = view.get();
 			views.emplace(remap_encoding, std::move(view));
@@ -1714,6 +1737,86 @@ private:
 		VkDevice m_device;
 	};
 
+	class event
+	{
+		VkDevice m_device = VK_NULL_HANDLE;
+		VkEvent m_vk_event = VK_NULL_HANDLE;
+
+		std::unique_ptr<buffer> m_buffer;
+		volatile uint32_t* m_value = nullptr;
+
+	public:
+		event(const render_device& dev)
+		{
+			m_device = dev;
+			if (dev.gpu().get_driver_vendor() != driver_vendor::AMD)
+			{
+				VkEventCreateInfo info
+				{
+					.sType = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO,
+					.pNext = nullptr,
+					.flags = 0
+				};
+				vkCreateEvent(dev, &info, nullptr, &m_vk_event);
+			}
+			else
+			{
+				// Work around AMD's broken event signals
+				m_buffer = std::make_unique<buffer>
+				(
+					dev,
+					4,
+					dev.get_memory_mapping().host_visible_coherent,
+					VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+					VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					0
+				);
+
+				m_value = reinterpret_cast<uint32_t*>(m_buffer->map(0, 4));
+				*m_value = 0xCAFEBABE;
+			}
+		}
+
+		~event()
+		{
+			if (m_vk_event) [[likely]]
+			{
+				vkDestroyEvent(m_device, m_vk_event, nullptr);
+			}
+			else
+			{
+				m_buffer->unmap();
+				m_buffer.reset();
+				m_value = nullptr;
+			}
+		}
+
+		void signal(const command_buffer& cmd, VkPipelineStageFlags stages)
+		{
+			if (m_vk_event) [[likely]]
+			{
+				vkCmdSetEvent(cmd, m_vk_event, stages);
+			}
+			else
+			{
+				insert_execution_barrier(cmd, stages, VK_PIPELINE_STAGE_TRANSFER_BIT);
+				vkCmdFillBuffer(cmd, m_buffer->value, 0, 4, 0xDEADBEEF);
+			}
+		}
+
+		VkResult status() const
+		{
+			if (m_vk_event) [[likely]]
+			{
+				return vkGetEventStatus(m_device, m_vk_event);
+			}
+			else
+			{
+				return (*m_value == 0xDEADBEEF)? VK_EVENT_SET : VK_EVENT_RESET;
+			}
+		}
+	};
+
 	struct sampler
 	{
 		VkSampler value;
@@ -1782,7 +1885,8 @@ private:
 
 	public:
 		framebuffer(VkDevice dev, VkRenderPass pass, u32 width, u32 height, std::vector<std::unique_ptr<vk::image_view>> &&atts)
-			: m_device(dev), attachments(std::move(atts))
+			: attachments(std::move(atts))
+			, m_device(dev)
 		{
 			std::vector<VkImageView> image_view_array(attachments.size());
 			size_t i = 0;
@@ -1828,7 +1932,7 @@ private:
 			if (fbo_images.size() != attachments.size())
 				return false;
 
-			for (int n = 0; n < fbo_images.size(); ++n)
+			for (uint n = 0; n < fbo_images.size(); ++n)
 			{
 				if (attachments[n]->info.image != fbo_images[n]->value ||
 					attachments[n]->info.format != fbo_images[n]->info.format)

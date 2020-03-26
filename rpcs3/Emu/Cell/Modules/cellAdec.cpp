@@ -1,5 +1,4 @@
 ﻿#include "stdafx.h"
-#include "Emu/System.h"
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/lv2/sys_sync.h"
@@ -265,15 +264,15 @@ class AudioDecoder : public ppu_thread
 {
 public:
 	squeue_t<AdecTask> job;
-	volatile bool is_closed;
-	volatile bool is_finished;
-	bool just_started;
-	bool just_finished;
+	volatile bool is_closed = false;
+	volatile bool is_finished = false;
+	bool just_started = false;
+	bool just_finished = false;
 
-	AVCodec* codec;
-	AVInputFormat* input_format;
-	AVCodecContext* ctx;
-	AVFormatContext* fmt;
+	AVCodec* codec = nullptr;
+	AVInputFormat* input_format = nullptr;
+	AVCodecContext* ctx = nullptr;
+	AVFormatContext* fmt = nullptr;
 	u8* io_buf;
 
 	struct AudioReader
@@ -297,7 +296,7 @@ public:
 	const u32 memSize;
 	const vm::ptr<CellAdecCbMsg> cbFunc;
 	const u32 cbArg;
-	u32 memBias;
+	u32 memBias = 0;
 
 	AdecTask task;
 	u64 last_pts, first_pts;
@@ -313,20 +312,11 @@ public:
 		, type(type)
 		, memAddr(addr)
 		, memSize(size)
-		, memBias(0)
 		, cbFunc(func)
 		, cbArg(arg)
-		, is_closed(false)
-		, is_finished(false)
-		, just_started(false)
-		, just_finished(false)
-		, codec(nullptr)
-		, input_format(nullptr)
-		, ctx(nullptr)
-		, fmt(nullptr)
 	{
-		av_register_all();
-		avcodec_register_all();
+		//av_register_all();
+		//avcodec_register_all();
 
 		switch (type)
 		{
@@ -513,7 +503,7 @@ public:
 					{
 						fmt::throw_exception("avformat_new_stream() failed" HERE);
 					}
-					ctx = fmt->streams[0]->codec; // TODO: check data
+					//ctx = fmt->streams[0]->codec; // TODO: check data
 
 					opts = nullptr;
 					av_dict_set(&opts, "refcounted_frames", "1", 0);
@@ -573,7 +563,7 @@ public:
 
 					int got_frame = 0;
 
-					int decode = avcodec_decode_audio4(ctx, frame.data, &got_frame, &au);
+					int decode = 0; //avcodec_decode_audio4(ctx, frame.data, &got_frame, &au);
 
 					if (decode <= 0)
 					{
@@ -843,7 +833,12 @@ error_code cellAdecClose(u32 handle)
 		thread_ctrl::wait_for(1000); // hack
 	}
 
-	idm::remove<ppu_thread>(handle);
+	if (!idm::remove_verify<ppu_thread>(handle, std::move(adec)))
+	{
+		// Removed by other thread beforehead
+		return CELL_ADEC_ERROR_ARG;
+	}
+
 	return CELL_OK;
 }
 

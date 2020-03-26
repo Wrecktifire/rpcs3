@@ -49,11 +49,6 @@ namespace rsx
 			}
 		}
 
-		void FIFO_control::set_put(u32 put)
-		{
-			m_ctrl->put = put;
-		}
-
 		void FIFO_control::set_get(u32 get)
 		{
 			if (m_ctrl->get == get)
@@ -90,6 +85,25 @@ namespace rsx
 				return true;
 			}
 
+			return false;
+		}
+
+		// Optimization for methods which can be batched together
+		// Beware, can be easily misused
+		bool FIFO_control::skip_methods(u32 count)
+		{
+			if (m_remaining_commands > count)
+			{
+				m_command_reg += m_command_inc * count;
+				m_args_ptr += 4 * count;
+				m_remaining_commands -= count;
+				m_internal_get += 4 * count;
+
+				return true;
+			}
+
+			m_internal_get += 4 * m_remaining_commands;
+			m_remaining_commands = 0;
 			return false;
 		}
 
@@ -165,7 +179,7 @@ namespace rsx
 
 			// Validate the args ptr if the command attempts to read from it
 			m_args_ptr = m_iotable->get_addr(m_internal_get + 4);
-			if (m_args_ptr == -1) [[unlikely]]
+			if (m_args_ptr == umax) [[unlikely]]
 			{
 				// Optional recovery
 				data.reg = FIFO_ERROR;
@@ -401,7 +415,7 @@ namespace rsx
 			}
 			case FIFO::FIFO_ERROR:
 			{
-				rsx_log.error("FIFO error: possible desync event (last cmd = 0x%x)", fifo_ctrl->last_cmd());
+				rsx_log.error("FIFO error: possible desync event (last cmd = 0x%x)", get_fifo_cmd());
 				recover_fifo();
 				return;
 			}
@@ -451,8 +465,8 @@ namespace rsx
 				if (fifo_ret_addr != RSX_CALL_STACK_EMPTY)
 				{
 					// Only one layer is allowed in the call stack.
-					rsx_log.error("FIFO: CALL found inside a subroutine. Discarding subroutine");
-					fifo_ctrl->set_get(std::exchange(fifo_ret_addr, RSX_CALL_STACK_EMPTY));
+					rsx_log.error("FIFO: CALL found inside a subroutine (last cmd = 0x%x)", get_fifo_cmd());
+					recover_fifo();
 					return;
 				}
 
@@ -465,8 +479,8 @@ namespace rsx
 			{
 				if (fifo_ret_addr == RSX_CALL_STACK_EMPTY)
 				{
-					rsx_log.error("FIFO: RET found without corresponding CALL. Discarding queue");
-					fifo_ctrl->set_get(ctrl->put);
+					rsx_log.error("FIFO: RET found without corresponding CALL (last cmd = 0x%x)", get_fifo_cmd());
+					recover_fifo();
 					return;
 				}
 
@@ -522,7 +536,25 @@ namespace rsx
 						capture::capture_buffer_notify(this, it);
 						break;
 					default:
+					{
+						// Use legacy logic for NV308A_COLOR - enqueue leading command with count
+						// Then enqueue each command arg alone with a no-op command
+						if (reg >= NV308A_COLOR && reg < NV308A_COLOR + 0x700)
+						{
+							const u32 remaining = std::min<u32>(fifo_ctrl->get_remaining_args_count(), (NV308A_COLOR + 0x700) - reg);
+
+							it.rsx_command.first = (fifo_ctrl->last_cmd() & RSX_METHOD_NON_INCREMENT_CMD_MASK) | (reg << 2) | (remaining << 18);
+
+							for (u32 i = 0; i < remaining && fifo_ctrl->get_pos() + (i + 1) * 4 != (ctrl->put & ~3); i++)
+							{
+								replay_cmd.rsx_command = std::make_pair(0, vm::read32(fifo_ctrl->get_current_arg_ptr() + (i + 1) * 4));
+
+								frame_capture.replay_commands.push_back(replay_cmd);
+							}
+						}
+
 						break;
+					}
 					}
 				}
 			}

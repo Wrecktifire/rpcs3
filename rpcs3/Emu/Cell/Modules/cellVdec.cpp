@@ -1,5 +1,4 @@
 ﻿#include "stdafx.h"
-#include "Emu/System.h"
 #include "Emu/IdManager.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/lv2/sys_sync.h"
@@ -117,7 +116,7 @@ struct vdec_context final
 	u32 frc_set{}; // Frame Rate Override
 	u64 next_pts{};
 	u64 next_dts{};
-	u32 ppu_tid{};
+	atomic_t<u32> ppu_tid{};
 
 	std::deque<vdec_frame> out;
 	atomic_t<u32> out_max = 60;
@@ -133,7 +132,18 @@ struct vdec_context final
 		, cb_func(func)
 		, cb_arg(arg)
 	{
+#ifdef _MSC_VER
+#pragma warning(push, 0)
+#else
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
 		avcodec_register_all();
+#ifdef _MSC_VER
+#pragma warning(pop)
+#else
+#pragma GCC diagnostic pop
+#endif
 
 		switch (type)
 		{
@@ -192,7 +202,7 @@ struct vdec_context final
 
 	void exec(ppu_thread& ppu, u32 vid)
 	{
-		ppu_tid = ppu.id;
+		ppu_tid.release(ppu.id);
 
 		// pcmd can be nullptr
 		for (auto* pcmd : in_cmd)
@@ -228,15 +238,15 @@ struct vdec_context final
 
 					packet.data = vm::_ptr<u8>(au_addr);
 					packet.size = au_size;
-					packet.pts = au_pts != -1 ? au_pts : INT64_MIN;
-					packet.dts = au_dts != -1 ? au_dts : INT64_MIN;
+					packet.pts = au_pts != umax ? au_pts : INT64_MIN;
+					packet.dts = au_dts != umax ? au_dts : INT64_MIN;
 
-					if (next_pts == 0 && au_pts != -1)
+					if (next_pts == 0 && au_pts != umax)
 					{
 						next_pts = au_pts;
 					}
 
-					if (next_dts == 0 && au_dts != -1)
+					if (next_dts == 0 && au_dts != umax)
 					{
 						next_dts = au_dts;
 					}
@@ -261,37 +271,38 @@ struct vdec_context final
 						break;
 					}
 
-					vdec_frame frame;
-					frame.avf.reset(av_frame_alloc());
-
-					if (!frame.avf)
-					{
-						fmt::throw_exception("av_frame_alloc() failed" HERE);
-					}
-
-					int got_picture = 0;
-
-					int decode = avcodec_decode_video2(ctx, frame.avf.get(), &got_picture, &packet);
-
-					if (decode < 0)
+					if (int ret = avcodec_send_packet(ctx, &packet); ret < 0)
 					{
 						char av_error[AV_ERROR_MAX_STRING_SIZE];
-						av_make_error_string(av_error, AV_ERROR_MAX_STRING_SIZE, decode);
-						fmt::throw_exception("AU decoding error(0x%x): %s" HERE, decode, av_error);
+						av_make_error_string(av_error, AV_ERROR_MAX_STRING_SIZE, ret);
+						fmt::throw_exception("AU queuing error(0x%x): %s" HERE, ret, av_error);
 					}
 
-					if (got_picture == 0)
+					while (true)
 					{
-						break;
-					}
+						// Keep receiving frames
+						vdec_frame frame;
+						frame.avf.reset(av_frame_alloc());
 
-					if (decode != packet.size)
-					{
-						cellVdec.error("Incorrect AU size (0x%x, decoded 0x%x)", packet.size, decode);
-					}
+						if (!frame.avf)
+						{
+							fmt::throw_exception("av_frame_alloc() failed" HERE);
+						}
 
-					if (got_picture)
-					{
+						if (int ret = avcodec_receive_frame(ctx, frame.avf.get()); ret < 0)
+						{
+							if (ret == AVERROR(EAGAIN))
+							{
+								break;
+							}
+							else
+							{
+								char av_error[AV_ERROR_MAX_STRING_SIZE];
+								av_make_error_string(av_error, AV_ERROR_MAX_STRING_SIZE, ret);
+								fmt::throw_exception("AU decoding error(0x%x): %s" HERE, ret, av_error);
+							}
+						}
+
 						if (frame->interlaced_frame)
 						{
 							// NPEB01838, NPUB31260
@@ -303,9 +314,9 @@ struct vdec_context final
 							fmt::throw_exception("Repeated frames not supported (0x%x)", frame->repeat_pict);
 						}
 
-						if (frame->pkt_pts != INT64_MIN)
+						if (frame->pts != INT64_MIN)
 						{
-							next_pts = frame->pkt_pts;
+							next_pts = frame->pts;
 						}
 
 						if (frame->pkt_dts != INT64_MIN)
@@ -382,7 +393,7 @@ struct vdec_context final
 							next_dts += amend;
 						}
 
-						cellVdec.trace("Got picture (pts=0x%llx[0x%llx], dts=0x%llx[0x%llx])", frame.pts, frame->pkt_pts, frame.dts, frame->pkt_dts);
+						cellVdec.trace("Got picture (pts=0x%llx[0x%llx], dts=0x%llx[0x%llx])", frame.pts, frame->pts, frame.dts, frame->pkt_dts);
 
 						std::lock_guard{mutex}, out.push_back(std::move(frame));
 
@@ -529,7 +540,7 @@ static error_code vdecQueryAttr(s32 type, u32 profile, u32 spec_addr /* may be 0
 			{
 				return CELL_VDEC_ERROR_ARG;
 			}
-	
+
 			memSize = new_sdk ? 0xD2F40B : 0xEB990B;
 			break;
 		}
@@ -676,13 +687,24 @@ error_code cellVdecClose(ppu_thread& ppu, u32 handle)
 	vdec->out_max = 0;
 	vdec->in_cmd.push(vdec_close);
 
-	while (!atomic_storage<u32>::load(vdec->ppu_tid))
+	while (!vdec->ppu_tid)
 	{
 		thread_ctrl::wait_for(1000);
 	}
 
-	ppu_execute<&sys_interrupt_thread_disestablish>(ppu, vdec->ppu_tid);
-	idm::remove<vdec_context>(handle);
+	const u32 tid = vdec->ppu_tid.exchange(-1);
+
+	if (tid != umax)
+	{
+		ppu_execute<&sys_interrupt_thread_disestablish>(ppu, tid);
+	}
+
+	if (!idm::remove_verify<vdec_context>(handle, std::move(vdec)))
+	{
+		// Other thread removed it beforehead
+		return CELL_VDEC_ERROR_ARG;
+	}
+
 	return CELL_OK;
 }
 

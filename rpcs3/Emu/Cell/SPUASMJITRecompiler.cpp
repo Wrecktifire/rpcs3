@@ -1,7 +1,7 @@
 ﻿#include "stdafx.h"
 #include "SPUASMJITRecompiler.h"
 
-#include "Emu/System.h"
+#include "Emu/system_config.h"
 #include "Emu/IdManager.h"
 
 #include "SPUDisAsm.h"
@@ -22,8 +22,8 @@
 #define SPU_OFF_16(x, ...) asmjit::x86::word_ptr(*cpu, offset32(&spu_thread::x, ##__VA_ARGS__))
 #define SPU_OFF_8(x, ...) asmjit::x86::byte_ptr(*cpu, offset32(&spu_thread::x, ##__VA_ARGS__))
 
-extern const spu_decoder<spu_interpreter_fast> g_spu_interpreter_fast; // TODO: avoid
-const spu_decoder<spu_recompiler> s_spu_decoder;
+constexpr spu_decoder<spu_interpreter_fast> g_spu_interpreter_fast; // TODO: avoid
+constexpr spu_decoder<spu_recompiler> s_spu_decoder;
 
 extern u64 get_timebased_time();
 
@@ -280,7 +280,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 			c->vzeroupper();
 		}
 	}
-	else if (utils::has_512() && false)
+	else if (utils::has_avx512() && false)
 	{
 		// AVX-512 optimized check using 512-bit registers (disabled)
 		words_align = 64;
@@ -304,7 +304,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 				continue;
 			}
 
-			const bool first = ls_off == -8192;
+			const bool first = ls_off == u32{} - 8192;
 
 			// Ensure small distance for disp8*N
 			if (j - ls_off >= 8192)
@@ -361,7 +361,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 		c->jnz(label_diff);
 		c->vzeroupper();
 	}
-	else if (0 && utils::has_512())
+	else if (0 && utils::has_avx512())
 	{
 		// AVX-512 optimized check using 256-bit registers
 		words_align = 32;
@@ -429,7 +429,7 @@ spu_function_t spu_recompiler::compile(spu_program&& _func)
 					continue;
 				}
 
-				const bool first = ls_off == -4096;
+				const bool first = ls_off == u32{0} - 4096;
 
 				// Ensure small distance for disp8*N
 				if (j - ls_off >= 4096)
@@ -1789,7 +1789,7 @@ void spu_recompiler::BG(spu_opcode_t op)
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 		c->vpsubd(vi, vb, va);
@@ -1819,7 +1819,7 @@ void spu_recompiler::NOR(spu_opcode_t op)
 {
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpternlogd(va, va, SPU_OFF_128(gpr, op.rb), 0x11 /* norCB */);
 		c->movdqa(SPU_OFF_128(gpr, op.rt), va);
@@ -1845,7 +1845,7 @@ void spu_recompiler::ABSDB(spu_opcode_t op)
 
 void spu_recompiler::ROT(spu_opcode_t op)
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
@@ -2007,7 +2007,7 @@ void spu_recompiler::SHL(spu_opcode_t op)
 
 void spu_recompiler::ROTH(spu_opcode_t op) //nf
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
@@ -2046,7 +2046,7 @@ void spu_recompiler::ROTH(spu_opcode_t op) //nf
 
 void spu_recompiler::ROTHM(spu_opcode_t op)
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
@@ -2106,7 +2106,7 @@ void spu_recompiler::ROTHM(spu_opcode_t op)
 
 void spu_recompiler::ROTMAH(spu_opcode_t op)
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
@@ -2167,7 +2167,7 @@ void spu_recompiler::ROTMAH(spu_opcode_t op)
 
 void spu_recompiler::SHLH(spu_opcode_t op)
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
@@ -2224,7 +2224,7 @@ void spu_recompiler::ROTI(spu_opcode_t op)
 	// rotate left
 	const int s = op.i7 & 0x1f;
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		c->vprold(va, va, s);
@@ -2337,7 +2337,7 @@ void spu_recompiler::CG(spu_opcode_t op)
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 	const XmmLink& vi = XmmAlloc();
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpaddd(vi, vb, va);
 		c->vpternlogd(vi, va, vb, 0x8e /* A?andBC:orBC */);
@@ -2367,7 +2367,7 @@ void spu_recompiler::NAND(spu_opcode_t op)
 	// nand
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpternlogd(va, va, SPU_OFF_128(gpr, op.rb), 0x77 /* nandCB */);
 		c->movdqa(SPU_OFF_128(gpr, op.rt), va);
@@ -3339,7 +3339,7 @@ void spu_recompiler::EQV(spu_opcode_t op)
 {
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpternlogd(vb, vb, SPU_OFF_128(gpr, op.ra), 0x99 /* xnorCB */);
 		c->movdqa(SPU_OFF_128(gpr, op.rt), vb);
@@ -3399,7 +3399,6 @@ void spu_recompiler::HGT(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -3408,7 +3407,7 @@ void spu_recompiler::HGT(spu_opcode_t op)
 
 void spu_recompiler::CLZ(spu_opcode_t op)
 {
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 		const XmmLink& vt = XmmAlloc();
@@ -3634,7 +3633,7 @@ void spu_recompiler::ORC(spu_opcode_t op)
 {
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpternlogd(vb, vb, SPU_OFF_128(gpr, op.ra), 0xbb /* orC!B */);
 		c->movdqa(SPU_OFF_128(gpr, op.rt), vb);
@@ -3741,7 +3740,6 @@ void spu_recompiler::HLGT(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -3846,7 +3844,7 @@ void spu_recompiler::CGX(spu_opcode_t op) //nf
 		c->paddd(res, vb);
 	}
 
-	c->movdqa(sign, XmmConst(_mm_set1_epi32(-0x80000000)));
+	c->movdqa(sign, XmmConst(_mm_set1_epi32(INT32_MIN)));
 	c->pxor(va, sign);
 	c->pxor(res, sign);
 	c->pcmpgtd(va, res);
@@ -3879,7 +3877,7 @@ void spu_recompiler::BGX(spu_opcode_t op) //nf
 	}
 
 	c->pand(vt, temp);
-	c->movdqa(sign, XmmConst(_mm_set1_epi32(-0x80000000)));
+	c->movdqa(sign, XmmConst(_mm_set1_epi32(INT32_MIN)));
 	c->pxor(va, sign);
 	c->pxor(vb, sign);
 	c->pcmpgtd(vb, va);
@@ -4071,7 +4069,6 @@ void spu_recompiler::HEQ(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -4098,7 +4095,7 @@ void spu_recompiler::CFLTU(spu_opcode_t op)
 	const XmmLink& vs3 = XmmAlloc();
 	if (op.i8 != 173) c->mulps(va, XmmConst(_mm_set1_ps(std::exp2(static_cast<float>(static_cast<s16>(173 - op.i8)))))); // scale
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vcvttps2udq(vs, va);
 		c->psrad(va, 31);
@@ -4137,7 +4134,7 @@ void spu_recompiler::CUFLT(spu_opcode_t op)
 	const XmmLink& va = XmmGet(op.ra, XmmType::Int);
 	const XmmLink& v1 = XmmAlloc();
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vcvtudq2ps(va, va);
 	}
@@ -4593,7 +4590,6 @@ void spu_recompiler::HGTI(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -4638,7 +4634,6 @@ void spu_recompiler::HLGTI(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -4701,7 +4696,6 @@ void spu_recompiler::HEQI(spu_opcode_t op)
 		c->lea(addr->r64(), get_pc(pos));
 		c->and_(*addr, 0x3fffc);
 		c->mov(SPU_OFF_32(pc), *addr);
-		c->lock().bts(SPU_OFF_32(status), 2);
 		c->mov(addr->r64(), reinterpret_cast<u64>(vm::base(0xffdead00)));
 		c->mov(asmjit::x86::dword_ptr(addr->r64()), "HALT"_u32);
 		c->jmp(ret);
@@ -4728,7 +4722,7 @@ void spu_recompiler::SELB(spu_opcode_t op)
 	const XmmLink& vb = XmmGet(op.rb, XmmType::Int);
 	const XmmLink& vc = XmmGet(op.rc, XmmType::Int);
 
-	if (utils::has_512())
+	if (utils::has_avx512())
 	{
 		c->vpternlogd(vc, vb, SPU_OFF_128(gpr, op.ra), 0xca /* A?B:C */);
 		c->movdqa(SPU_OFF_128(gpr, op.rt4), vc);
@@ -4750,7 +4744,7 @@ void spu_recompiler::SELB(spu_opcode_t op)
 
 void spu_recompiler::SHUFB(spu_opcode_t op)
 {
-	if (0 && utils::has_512())
+	if (0 && utils::has_avx512())
 	{
 		// Deactivated due to poor performance of mask merge ops.
 		const XmmLink& va = XmmGet(op.ra, XmmType::Int);
@@ -4785,11 +4779,11 @@ void spu_recompiler::SHUFB(spu_opcode_t op)
 	const XmmLink& vt = XmmAlloc();
 	const XmmLink& vm = XmmAlloc();
 	const XmmLink& v5 = XmmAlloc();
-	c->movdqa(vm, XmmConst(_mm_set1_epi8(0xc0)));
+	c->movdqa(vm, XmmConst(_mm_set1_epi8(static_cast<s8>(0xc0))));
 
 	if (utils::has_avx())
 	{
-		c->vpand(v5, vc, XmmConst(_mm_set1_epi8(0xe0)));
+		c->vpand(v5, vc, XmmConst(_mm_set1_epi8(static_cast<s8>(0xe0))));
 		c->vpxor(vc, vc, XmmConst(_mm_set1_epi8(0xf)));
 		c->vpshufb(va, va, vc);
 		c->vpslld(vt, vc, 3);
@@ -4804,7 +4798,7 @@ void spu_recompiler::SHUFB(spu_opcode_t op)
 	else
 	{
 		c->movdqa(v5, vc);
-		c->pand(v5, XmmConst(_mm_set1_epi8(0xe0)));
+		c->pand(v5, XmmConst(_mm_set1_epi8(static_cast<s8>(0xe0))));
 		c->movdqa(vt, vc);
 		c->pand(vt, vm);
 		c->pxor(vc, XmmConst(_mm_set1_epi8(0xf)));

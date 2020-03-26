@@ -1,5 +1,4 @@
-#include "stdafx.h"
-#include "Emu/System.h"
+﻿#include "stdafx.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Utilities/asm.h"
 #include "Emu/Cell/lv2/sys_event.h"
@@ -1088,11 +1087,11 @@ error_code _cellSyncLFQueueCompletePushPointer(ppu_thread& ppu, vm::ptr<CellSync
 		if (queue->push2.compare_and_swap_test(old, push2))
 		{
 			verify(HERE), (var2 + var4 < 16);
-			if (var6 != -1)
+			if (var6 != umax)
 			{
 				verify(HERE), (queue->push3.compare_and_swap_test(old2, push3));
 				verify(HERE), (fpSendSignal);
-				return not_an_error(fpSendSignal(ppu, queue->m_eaSignal.addr(), var6));
+				return not_an_error(fpSendSignal(ppu, vm::cast(queue->m_eaSignal.addr(), HERE), var6));
 			}
 			else
 			{
@@ -1147,7 +1146,7 @@ error_code _cellSyncLFQueuePushBody(ppu_thread& ppu, vm::ptr<CellSyncLFQueue> qu
 			res = _cellSyncLFQueueGetPushPointer2(ppu, queue, position, isBlocking, 0);
 		}
 
-		if (!isBlocking || res != CELL_SYNC_ERROR_AGAIN)
+		if (!isBlocking || res + 0u != CELL_SYNC_ERROR_AGAIN)
 		{
 			if (res) return not_an_error(res);
 
@@ -1387,11 +1386,11 @@ error_code _cellSyncLFQueueCompletePopPointer(ppu_thread& ppu, vm::ptr<CellSyncL
 
 		if (queue->pop2.compare_and_swap_test(old, pop2))
 		{
-			if (var6 != -1)
+			if (var6 != umax)
 			{
 				verify(HERE), (queue->pop3.compare_and_swap_test(old2, pop3));
 				verify(HERE), (fpSendSignal);
-				return not_an_error(fpSendSignal(ppu, queue->m_eaSignal.addr(), var6));
+				return not_an_error(fpSendSignal(ppu, vm::cast(queue->m_eaSignal.addr(), HERE), var6));
 			}
 			else
 			{
@@ -1446,7 +1445,7 @@ error_code _cellSyncLFQueuePopBody(ppu_thread& ppu, vm::ptr<CellSyncLFQueue> que
 			res = _cellSyncLFQueueGetPopPointer2(ppu, queue, position, isBlocking, 0);
 		}
 
-		if (!isBlocking || res != CELL_SYNC_ERROR_AGAIN)
+		if (!isBlocking || res + 0u != CELL_SYNC_ERROR_AGAIN)
 		{
 			if (res) return not_an_error(res);
 

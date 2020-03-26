@@ -1,8 +1,11 @@
 ﻿add_library(rpcs3_emu
 	IdManager.cpp
 	System.cpp
+	system_config.cpp
+	system_config_types.cpp
 	VFS.cpp
 	GDB.cpp
+	title.cpp
 )
 
 target_link_libraries(rpcs3_emu
@@ -27,13 +30,16 @@ target_sources(rpcs3_emu PRIVATE
 	../util/atomic.cpp
 	../util/atomic2.cpp
 	../util/shared_cptr.cpp
+	../util/fixed_typemap.cpp
+	../util/logs.cpp
+	../util/yaml.cpp
+	../util/cereal.cpp
 	../../Utilities/bin_patch.cpp
 	../../Utilities/cond.cpp
 	../../Utilities/Config.cpp
 	../../Utilities/dynamic_library.cpp
 	../../Utilities/File.cpp
 	../../Utilities/JIT.cpp
-	../../Utilities/Log.cpp
 	../../Utilities/LUrlParser.cpp
 	../../Utilities/mutex.cpp
 	../../Utilities/rXml.cpp
@@ -56,6 +62,12 @@ if (MSVC)
 	set_source_files_properties("../../Utilities/JIT.cpp" PROPERTIES COMPILE_FLAGS /GR-)
 else()
 	set_source_files_properties("../../Utilities/JIT.cpp" PROPERTIES COMPILE_FLAGS -fno-rtti)
+endif()
+
+if (MSVC)
+	set_source_files_properties("../util/yaml.cpp" PROPERTIES COMPILE_FLAGS /EHsc)
+else()
+	set_source_files_properties("../util/yaml.cpp" PROPERTIES COMPILE_FLAGS -fexceptions)
 endif()
 
 
@@ -89,6 +101,7 @@ target_sources(rpcs3_emu PRIVATE
 # Audio
 target_sources(rpcs3_emu PRIVATE
 	Audio/AudioDumper.cpp
+	Audio/AudioBackend.cpp
 	Audio/AL/OpenALBackend.cpp
 )
 
@@ -111,13 +124,12 @@ if(USE_FAUDIO AND SDL2_FOUND AND NOT SDL2_VERSION VERSION_LESS 2.0.9)
 endif()
 
 if(WIN32)
+	target_include_directories(rpcs3_emu PUBLIC "${RPCS3_SRC_DIR}/../3rdparty/XAudio2Redist/include")
+	target_link_libraries(rpcs3_emu PRIVATE "${RPCS3_SRC_DIR}/../3rdparty/XAudio2Redist/libs/xaudio2_9redist.lib")
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /DELAYLOAD:xaudio2_9redist.dll")
 	target_sources(rpcs3_emu PRIVATE
-		Audio/XAudio2/XAudio27Backend.cpp
-		Audio/XAudio2/XAudio28Backend.cpp
 		Audio/XAudio2/XAudio2Backend.cpp
 	)
-	# Slimmed down version of minidx9 for XAudio2_7 only
-	include_directories(BEFORE "${RPCS3_SRC_DIR}/../3rdparty/XAudio2_7")
 endif()
 
 target_link_libraries(rpcs3_emu
@@ -188,6 +200,7 @@ target_sources(rpcs3_emu PRIVATE
 	Cell/Modules/cellAtracMulti.cpp
 	Cell/Modules/cellAudio.cpp
 	Cell/Modules/cellAudioOut.cpp
+	Cell/Modules/cellAuthDialog.cpp
 	Cell/Modules/cellAvconfExt.cpp
 	Cell/Modules/cellBgdl.cpp
 	Cell/Modules/cellCamera.cpp
@@ -338,11 +351,18 @@ target_link_libraries(rpcs3_emu
 # Io
 target_sources(rpcs3_emu PRIVATE
 	Io/KeyboardHandler.cpp
+	Io/pad_config.cpp
+	Io/pad_config_types.cpp
 	Io/PadHandler.cpp
 	Io/usb_device.cpp
 	Io/Skylander.cpp
+	Io/GHLtar.cpp
 )
 
+# Np
+target_sources(rpcs3_emu PRIVATE
+	NP/np_handler.cpp
+)
 
 # Memory
 target_sources(rpcs3_emu PRIVATE
@@ -372,13 +392,15 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/Null/NullGSRender.cpp
 	RSX/Overlays/overlay_animation.cpp
 	RSX/Overlays/overlay_edit_text.cpp
-	RSX/Overlays/overlay_font.cpp
+	RSX/Overlays/overlay_fonts.cpp
 	RSX/Overlays/overlay_list_view.cpp
 	RSX/Overlays/overlay_message_dialog.cpp
 	RSX/Overlays/overlay_osk.cpp
+	RSX/Overlays/overlay_osk_panel.cpp
 	RSX/Overlays/overlay_perf_metrics.cpp
 	RSX/Overlays/overlay_progress_bar.cpp
 	RSX/Overlays/overlay_save_dialog.cpp
+	RSX/Overlays/overlay_utils.cpp
 	RSX/Overlays/overlays.cpp
 	RSX/Overlays/overlay_shader_compile_notification.cpp
 	RSX/Overlays/overlay_trophy_notification.cpp
@@ -387,11 +409,13 @@ target_sources(rpcs3_emu PRIVATE
 	RSX/Capture/rsx_capture.cpp
 	RSX/Capture/rsx_replay.cpp
 	RSX/GL/GLCommonDecompiler.cpp
+	RSX/GL/GLDraw.cpp
 	RSX/GL/GLFragmentProgram.cpp
 	RSX/GL/GLGSRender.cpp
 	RSX/GL/GLHelpers.cpp
 	RSX/GL/GLPresent.cpp
 	RSX/GL/GLRenderTargets.cpp
+	RSX/GL/GLShaderInterpreter.cpp
 	RSX/GL/GLTexture.cpp
 	RSX/GL/GLVertexBuffers.cpp
 	RSX/GL/GLVertexProgram.cpp
@@ -403,6 +427,7 @@ if(TARGET 3rdparty_vulkan)
 		RSX/VK/VKCommandStream.cpp
 		RSX/VK/VKCommonDecompiler.cpp
 		RSX/VK/VKDMA.cpp
+		RSX/VK/VKDraw.cpp
 		RSX/VK/VKFormats.cpp
 		RSX/VK/VKFragmentProgram.cpp
 		RSX/VK/VKFramebuffer.cpp
@@ -414,6 +439,7 @@ if(TARGET 3rdparty_vulkan)
 		RSX/VK/VKRenderPass.cpp
 		RSX/VK/VKResolveHelper.cpp
 		RSX/VK/VKResourceManager.cpp
+		RSX/VK/VKShaderInterpreter.cpp
 		RSX/VK/VKTexture.cpp
 		RSX/VK/VKVertexBuffers.cpp
 		RSX/VK/VKVertexProgram.cpp

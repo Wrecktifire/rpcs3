@@ -1,6 +1,10 @@
+﻿#include "stdafx.h"
 #include "memory_string_searcher.h"
+#include "Emu/Memory/vm.h"
 
 #include <QLabel>
+#include <QPushButton>
+#include <QHBoxLayout>
 
 LOG_CHANNEL(gui_log, "GUI");
 
@@ -30,9 +34,9 @@ memory_string_searcher::memory_string_searcher(QWidget* parent)
 
 void memory_string_searcher::OnSearch()
 {
-	const QString wstr = m_addr_line->text();
-	const char *str = wstr.toStdString().c_str();
-	const u32 len = wstr.length();
+	const std::string wstr = m_addr_line->text().toStdString();
+	const char *str = wstr.c_str();
+	const u32 len = ::size32(wstr);
 
 	gui_log.notice("Searching for string %s", str);
 

@@ -2,6 +2,7 @@
 #include "sys_spu.h"
 
 #include "Emu/System.h"
+#include "Emu/VFS.h"
 #include "Emu/IdManager.h"
 #include "Crypto/unself.h"
 #include "Crypto/unedat.h"
@@ -17,8 +18,11 @@
 #include "sys_memory.h"
 #include "sys_mmapper.h"
 #include "sys_event.h"
+#include "sys_fs.h"
 
 LOG_CHANNEL(sys_spu);
+
+extern u64 get_timebased_time();
 
 void sys_spu_image::load(const fs::file& stream)
 {
@@ -38,31 +42,36 @@ void sys_spu_image::load(const fs::file& stream)
 	{
 		spu_log.notice("** Segment: p_type=0x%x, p_vaddr=0x%llx, p_filesz=0x%llx, p_memsz=0x%llx, flags=0x%x", prog.p_type, prog.p_vaddr, prog.p_filesz, prog.p_memsz, prog.p_flags);
 
-		if (prog.p_type != SYS_SPU_SEGMENT_TYPE_COPY && prog.p_type != SYS_SPU_SEGMENT_TYPE_INFO)
+		if (prog.p_type != u32{SYS_SPU_SEGMENT_TYPE_COPY} && prog.p_type != u32{SYS_SPU_SEGMENT_TYPE_INFO})
 		{
 			spu_log.error("Unknown program type (0x%x)", prog.p_type);
 		}
 	}
 
-	type        = SYS_SPU_IMAGE_TYPE_KERNEL;
-
-	nsegs       = sys_spu_image::get_nsegs(obj.progs);
+	this->type = SYS_SPU_IMAGE_TYPE_KERNEL;
+	const s32 nsegs = sys_spu_image::get_nsegs(obj.progs);
 
 	const u32 mem_size = nsegs * sizeof(sys_spu_segment) + ::size32(stream);
-	segs        = vm::cast(vm::alloc(mem_size, vm::main));
+	const vm::ptr<sys_spu_segment> segs = vm::cast(vm::alloc(mem_size, vm::main));
 
-	// Write ID and save entry
-	entry_point = idm::make<lv2_obj, lv2_spu_image>(+obj.header.e_entry);
+	const u32 entry = obj.header.e_entry;
 
-	const u32 src = segs.addr() + nsegs * sizeof(sys_spu_segment);
+	const u32 src = (segs + nsegs).addr();
 
 	stream.seek(0);
 	stream.read(vm::base(src), stream.size());
 
-	if (nsegs < 0 || sys_spu_image::fill(segs, nsegs, obj.progs, src) != nsegs)
+	if (nsegs <= 0 || nsegs > 0x20 || sys_spu_image::fill(segs, nsegs, obj.progs, src) != nsegs)
 	{
 		fmt::throw_exception("Failed to load SPU segments (%d)" HERE, nsegs);
 	}
+
+	// Write ID and save entry
+	this->entry_point = idm::make<lv2_obj, lv2_spu_image>(+obj.header.e_entry, segs, nsegs);
+
+	// Unused and set to 0
+	this->nsegs = 0;
+	this->segs = vm::null;
 
 	vm::page_protect(segs.addr(), ::align(mem_size, 4096), 0, 0, vm::page_writable);
 }
@@ -199,7 +208,7 @@ error_code _sys_spu_image_get_information(ppu_thread& ppu, vm::ptr<sys_spu_image
 	}
 
 	*entry_point = image->e_entry;
-	*nsegs       = img->nsegs;
+	*nsegs       = image->nsegs;
 	return CELL_OK;
 }
 
@@ -209,12 +218,19 @@ error_code sys_spu_image_open(ppu_thread& ppu, vm::ptr<sys_spu_image> img, vm::c
 
 	sys_spu.warning("sys_spu_image_open(img=*0x%x, path=%s)", img, path);
 
-	const fs::file elf_file = decrypt_self(fs::file(vfs::get(path.get_ptr())), g_fxo->get<loaded_npdrm_keys>()->devKlic.data());
+	auto [fs_error, ppath, file] = lv2_file::open(path.get_ptr(), 0, 0);
+
+	if (fs_error)
+	{
+		return {fs_error, path};
+	}
+
+	const fs::file elf_file = decrypt_self(std::move(file), g_fxo->get<loaded_npdrm_keys>()->devKlic.data());
 
 	if (!elf_file)
 	{
-		sys_spu.error("sys_spu_image_open() error: failed to open %s!", path);
-		return CELL_ENOENT;
+		sys_spu.error("sys_spu_image_open(): file %s is illegal for SPU image!", path);
+		return {CELL_ENOEXEC, path};
 	}
 
 	img->load(elf_file);
@@ -242,12 +258,14 @@ error_code _sys_spu_image_close(ppu_thread& ppu, vm::ptr<sys_spu_image> img)
 		return CELL_EINVAL;
 	}
 
-	if (!idm::remove<lv2_obj, lv2_spu_image>(img->entry_point))
+	const auto handle = idm::withdraw<lv2_obj, lv2_spu_image>(img->entry_point);
+
+	if (!handle)
 	{
 		return CELL_ESRCH;
 	}
 
-	vm::dealloc(img->segs.addr(), vm::main);
+	verify(HERE), vm::dealloc(handle->segs.addr(), vm::main);
 	return CELL_OK;
 }
 
@@ -257,8 +275,20 @@ error_code _sys_spu_image_get_segments(ppu_thread& ppu, vm::ptr<sys_spu_image> i
 
 	sys_spu.error("_sys_spu_image_get_segments(img=*0x%x, segments=*0x%x, nseg=%d)", img, segments, nseg);
 
+	if (nseg <= 0 || nseg > 0x20 || img->type != SYS_SPU_IMAGE_TYPE_KERNEL)
+	{
+		return CELL_EINVAL;
+	}
+
+	const auto handle = idm::get<lv2_obj, lv2_spu_image>(img->entry_point);
+
+	if (!handle)
+	{
+		return CELL_ESRCH;
+	}
+
 	// TODO: apply SPU patches
-	std::memcpy(segments.get_ptr(), img->segs.get_ptr(), sizeof(sys_spu_segment) * nseg);
+	std::memcpy(segments.get_ptr(), handle->segs.get_ptr(), sizeof(sys_spu_segment) * std::min<s32>(nseg, handle->nsegs));
 	return CELL_OK;
 }
 
@@ -273,14 +303,11 @@ error_code sys_spu_thread_initialize(ppu_thread& ppu, vm::ptr<u32> thread, u32 g
 		return CELL_EINVAL;
 	}
 
-	if (img->type != SYS_SPU_IMAGE_TYPE_KERNEL && img->type != SYS_SPU_IMAGE_TYPE_USER)
+	sys_spu_image image;
+
+	switch (img->type)
 	{
-		return CELL_EINVAL;
-	}
-
-	sys_spu_image image = *img;
-
-	if (img->type == SYS_SPU_IMAGE_TYPE_KERNEL)
+	case SYS_SPU_IMAGE_TYPE_KERNEL:
 	{
 		const auto handle = idm::get<lv2_obj, lv2_spu_image>(img->entry_point);
 
@@ -289,8 +316,24 @@ error_code sys_spu_thread_initialize(ppu_thread& ppu, vm::ptr<u32> thread, u32 g
 			return CELL_ESRCH;
 		}
 
-		// Save actual entry point
+		// Image information is stored in IDM
 		image.entry_point = handle->e_entry;
+		image.nsegs = handle->nsegs;
+		image.segs = handle->segs;
+		image.type = SYS_SPU_IMAGE_TYPE_KERNEL;
+		break;
+	}
+	case SYS_SPU_IMAGE_TYPE_USER:
+	{
+		if (img->entry_point > 0x3fffc || img->nsegs <= 0 || img->nsegs > 0x20)
+		{
+			return CELL_EINVAL;
+		}
+
+		image = *img;
+		break;
+	}
+	default: return CELL_EINVAL;
 	}
 
 	// Read thread name
@@ -345,13 +388,13 @@ error_code sys_spu_thread_initialize(ppu_thread& ppu, vm::ptr<u32> thread, u32 g
 
 	group->args[inited] = {arg->arg1, arg->arg2, arg->arg3, arg->arg4};
 	group->imgs[inited].first = image;
-	group->imgs[inited].second.assign(img->segs.get_ptr(), img->segs.get_ptr() + img->nsegs);
+	group->imgs[inited].second.assign(image.segs.get_ptr(), image.segs.get_ptr() + image.nsegs);
 
 	if (++group->init == group->max_num)
 	{
 		if (g_cfg.core.max_spurs_threads < 6 && group->max_num > 0u + g_cfg.core.max_spurs_threads)
 		{
-			if (group->name.size() >= 20 && group->name.compare(group->name.size() - 20, 20, "CellSpursKernelGroup", 20) == 0)
+			if (group->name.ends_with("CellSpursKernelGroup"))
 			{
 				// Hack: don't run more SPURS threads than specified.
 				group->max_run = g_cfg.core.max_spurs_threads;
@@ -400,7 +443,7 @@ error_code sys_spu_thread_get_exit_status(ppu_thread& ppu, u32 id, vm::ptr<u32> 
 		return CELL_ESRCH;
 	}
 
-	if (thread->status & SPU_STATUS_STOPPED_BY_STOP)
+	if (thread->status_npc.load().status & SPU_STATUS_STOPPED_BY_STOP)
 	{
 		*status = thread->ch_out_mbox.get_value();
 		return CELL_OK;
@@ -510,7 +553,7 @@ error_code sys_spu_thread_group_create(ppu_thread& ppu, vm::ptr<u32> id, u32 num
 		mem_size = 0x40000 * num;
 	}
 
-	if (num < min_threads || num > max_threads || 
+	if (num < min_threads || num > max_threads ||
 		(needs_root && min_prio == 0x10) || (use_scheduler && (prio > 255 || prio < min_prio)))
 	{
 		return CELL_EINVAL;
@@ -635,13 +678,12 @@ error_code sys_spu_thread_group_start(ppu_thread& ppu, u32 id)
 			sys_spu_image::deploy(thread->offset, img.second.data(), img.first.nsegs);
 
 			thread->cpu_init();
-			thread->npc = img.first.entry_point;
 			thread->gpr[3] = v128::from64(0, args[0]);
 			thread->gpr[4] = v128::from64(0, args[1]);
 			thread->gpr[5] = v128::from64(0, args[2]);
 			thread->gpr[6] = v128::from64(0, args[3]);
 
-			thread->status.exchange(SPU_STATUS_RUNNING);
+			thread->status_npc = {SPU_STATUS_RUNNING, img.first.entry_point};
 		}
 	}
 
@@ -983,6 +1025,60 @@ error_code sys_spu_thread_group_get_priority(ppu_thread& ppu, u32 id, vm::ptr<s3
 	return CELL_OK;
 }
 
+error_code sys_spu_thread_group_set_cooperative_victims(ppu_thread& ppu, u32 id, u32 threads_mask)
+{
+	vm::temporary_unlock(ppu);
+
+	sys_spu.warning("sys_spu_thread_group_set_cooperative_victims(id=0x%x, threads_mask=0x%x)", id, threads_mask);
+
+	const auto group = idm::get<lv2_spu_group>(id);
+
+	if (!group)
+	{
+		return CELL_ESRCH;
+	}
+
+	if (!(group->type & SYS_SPU_THREAD_GROUP_TYPE_COOPERATE_WITH_SYSTEM))
+	{
+		return CELL_EINVAL;
+	}
+
+	if (threads_mask >= 1u << group->max_num)
+	{
+		return CELL_EINVAL;
+	}
+
+	// TODO
+
+	return CELL_OK;
+}
+
+error_code sys_spu_thread_group_syscall_253(ppu_thread& ppu, u32 id, vm::ptr<sys_spu_thread_group_syscall_253_info> info)
+{
+	vm::temporary_unlock(ppu);
+
+	sys_spu.warning("sys_spu_thread_group_syscall_253(id=0x%x, info=*0x%x)", id, info);
+
+	const auto group = idm::get<lv2_spu_group>(id);
+
+	if (!group)
+	{
+		return CELL_ESRCH;
+	}
+
+	if (!(group->type & SYS_SPU_THREAD_GROUP_TYPE_COOPERATE_WITH_SYSTEM))
+	{
+		return CELL_EINVAL;
+	}
+
+	// TODO
+
+	info->deadlineMissCounter = 0;
+	info->deadlineMeetCounter = 0;
+	info->timestamp = get_timebased_time();
+	return CELL_OK;
+}
+
 error_code sys_spu_thread_write_ls(ppu_thread& ppu, u32 id, u32 lsa, u64 value, u32 type)
 {
 	vm::temporary_unlock(ppu);
@@ -1163,6 +1259,11 @@ error_code sys_spu_thread_group_connect_event(ppu_thread& ppu, u32 id, u32 eq, u
 	if (!ep)
 	{
 		sys_spu.error("sys_spu_thread_group_connect_event(): unknown event type (%d)", et);
+		return CELL_EINVAL;
+	}
+
+	if (et == SYS_SPU_THREAD_GROUP_EVENT_SYSTEM_MODULE && !(group->type & SYS_SPU_THREAD_GROUP_TYPE_COOPERATE_WITH_SYSTEM))
+	{
 		return CELL_EINVAL;
 	}
 
@@ -1589,7 +1690,14 @@ error_code sys_raw_spu_destroy(ppu_thread& ppu, u32 id)
 
 	sys_spu.warning("sys_raw_spu_destroy(id=%d)", id);
 
-	const auto thread = idm::get<named_thread<spu_thread>>(spu_thread::find_raw_spu(id));
+	const u32 idm_id = spu_thread::find_raw_spu(id);
+
+	auto thread = idm::get<named_thread<spu_thread>>(idm_id, [](named_thread<spu_thread>& thread)
+	{
+		// Stop thread
+		thread.state += cpu_flag::exit;
+		thread = thread_state::aborting;
+	});
 
 	if (!thread) [[unlikely]]
 	{
@@ -1598,36 +1706,35 @@ error_code sys_raw_spu_destroy(ppu_thread& ppu, u32 id)
 
 	// TODO: CELL_EBUSY is not returned
 
-	// Stop thread
-	thread->state += cpu_flag::stop;
-
 	// Kernel objects which must be removed
-	std::unordered_map<lv2_obj*, u32, pointer_hash<lv2_obj, alignof(void*)>> to_remove;
+	std::vector<std::pair<std::shared_ptr<lv2_obj>, u32>> to_remove;
 
 	// Clear interrupt handlers
 	for (auto& intr : thread->int_ctrl)
 	{
-		if (const auto tag = intr.tag.lock())
+		if (auto tag = intr.tag.lock())
 		{
 			if (auto handler = tag->handler.lock())
 			{
 				// SLEEP
+				lv2_obj::sleep(ppu);
 				handler->join();
-				to_remove.emplace(handler.get(), 0);
+				to_remove.emplace_back(std::move(handler), 0);
 			}
 
-			to_remove.emplace(tag.get(), 0);
+			to_remove.emplace_back(std::move(tag), 0);
 		}
 	}
 
 	// Scan all kernel objects to determine IDs
 	idm::select<lv2_obj>([&](u32 id, lv2_obj& obj)
 	{
-		const auto found = to_remove.find(&obj);
-
-		if (found != to_remove.end())
+		for (auto& pair : to_remove)
 		{
-			found->second = id;
+			if (pair.first.get() == std::addressof(obj))
+			{
+				pair.second = id;
+			}
 		}
 	});
 
@@ -1635,12 +1742,19 @@ error_code sys_raw_spu_destroy(ppu_thread& ppu, u32 id)
 	for (auto&& pair : to_remove)
 	{
 		if (pair.second >> 24 == 0xa)
-			idm::remove<lv2_obj, lv2_int_tag>(pair.second);
+			idm::remove_verify<lv2_obj, lv2_int_tag>(pair.second, std::move(pair.first));
 		if (pair.second >> 24 == 0xb)
-			idm::remove<lv2_obj, lv2_int_serv>(pair.second);
+			idm::remove_verify<lv2_obj, lv2_int_serv>(pair.second, std::move(pair.first));
 	}
 
-	idm::remove<named_thread<spu_thread>>(thread->id);
+	(*thread)();
+
+	if (!idm::remove_verify<named_thread<spu_thread>>(idm_id, std::move(thread)))
+	{
+		// Other thread destroyed beforehead
+		return CELL_ESRCH;
+	}
+
 	return CELL_OK;
 }
 
@@ -1663,7 +1777,7 @@ error_code sys_raw_spu_create_interrupt_tag(ppu_thread& ppu, u32 id, u32 class_i
 
 		auto thread = idm::check_unlocked<named_thread<spu_thread>>(spu_thread::find_raw_spu(id));
 
-		if (!thread)
+		if (!thread || *thread == thread_state::aborting)
 		{
 			error = CELL_ESRCH;
 			return result;

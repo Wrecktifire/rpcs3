@@ -5,6 +5,7 @@
 	breakpoint_list.cpp
 	cg_disasm_window.cpp
 	cheat_manager.cpp
+	curl_handle.cpp
 	custom_dialog.cpp
 	debugger_frame.cpp
 	debugger_list.cpp
@@ -29,6 +30,7 @@
 	memory_viewer_panel.cpp
 	msg_dialog_frame.cpp
 	osk_dialog_frame.cpp
+	pad_led_settings_dialog.cpp
 	pad_settings_dialog.cpp
 	persistent_settings.cpp
 	pkg_install_dialog.cpp
@@ -40,6 +42,8 @@
 	save_data_info_dialog.cpp
 	save_data_list_dialog.cpp
 	save_manager_dialog.cpp
+	screenshot_manager_dialog.cpp
+	screenshot_preview.cpp
 	settings.cpp
 	settings_dialog.cpp
 	skylander_dialog.cpp
@@ -59,6 +63,7 @@
 set(UI_FILES
 	about_dialog.ui
 	main_window.ui
+	pad_led_settings_dialog.ui
 	pad_settings_dialog.ui
 	settings_dialog.ui
 	welcome_dialog.ui
@@ -89,4 +94,6 @@ target_link_libraries(rpcs3_ui
 		3rdparty::hidapi
 		3rdparty::libusb
 		3rdparty::libpng
-		3rdparty::7z)
+		3rdparty::7z
+		3rdparty::wolfssl
+		3rdparty::libcurl)

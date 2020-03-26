@@ -2,7 +2,10 @@
 #error "FAudio support disabled but still being built."
 #endif
 
+#include "stdafx.h"
 #include "FAudioBackend.h"
+#include "Emu/system_config.h"
+#include "Emu/System.h"
 
 LOG_CHANNEL(FAudio_, "FAudio");
 

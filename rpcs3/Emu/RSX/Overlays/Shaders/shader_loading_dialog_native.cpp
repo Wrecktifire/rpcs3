@@ -1,5 +1,6 @@
 ﻿#include "stdafx.h"
 #include "shader_loading_dialog_native.h"
+#include "../overlay_message_dialog.h"
 
 namespace rsx
 {
@@ -49,6 +50,6 @@ namespace rsx
 	void shader_loading_dialog_native::close()
 	{
 		dlg->return_code = CELL_OK;
-		dlg->close();
+		dlg->close(false, false);
 	}
 }

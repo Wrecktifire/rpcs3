@@ -1,8 +1,10 @@
 ﻿#pragma once
 
+#include <queue>
 #include <deque>
 #include <variant>
 #include <stack>
+#include <atomic>
 
 #include "GCM.h"
 #include "rsx_cache.h"
@@ -13,7 +15,6 @@
 #include "RSXFragmentProgram.h"
 #include "rsx_methods.h"
 #include "rsx_utils.h"
-#include "Overlays/overlays.h"
 #include "Common/texture_cache_utils.h"
 
 #include "Utilities/Thread.h"
@@ -27,13 +28,17 @@
 extern u64 get_guest_system_time();
 extern u64 get_system_time();
 
-extern bool user_asked_for_frame_capture;
-extern bool capture_current_frame;
+extern std::atomic<bool> user_asked_for_frame_capture;
 extern rsx::frame_trace_data frame_debug;
 extern rsx::frame_capture_data frame_capture;
 
 namespace rsx
 {
+	namespace overlays
+	{
+		class display_manager;
+	}
+
 	struct rsx_iomap_table
 	{
 		std::array<atomic_t<u32>, 4096> ea;
@@ -201,9 +206,9 @@ namespace rsx
 					{
 						if (max_index >= attrib.frequency)
 						{
-							// Actually uses the modulo operator, cannot safely optimize
+							// Actually uses the modulo operator
 							_min_index = 0;
-							_max_index = std::max<u32>(_max_index, attrib.frequency - 1);
+							_max_index = attrib.frequency - 1;
 						}
 						else
 						{
@@ -215,7 +220,7 @@ namespace rsx
 					{
 						// Division operator
 						_min_index = std::min(_min_index, first / attrib.frequency);
-						_max_index = std::max<u32>(_max_index, max_index / attrib.frequency);
+						_max_index = std::max<u32>(_max_index, aligned_div(max_index, attrib.frequency));
 					}
 				}
 			}
@@ -335,6 +340,7 @@ namespace rsx
 			u32 driver_handle;
 			u32 result;
 			u32 num_draws;
+			u32 data_type;
 			u64 sync_tag;
 			u64 timestamp;
 			bool pending;
@@ -367,8 +373,9 @@ namespace rsx
 			sync_no_notify = 2   // If set, backend hint notifications will not be made
 		};
 
-		struct ZCULL_control
+		class ZCULL_control
 		{
+		protected:
 			// Delay before a report update operation is forced to retire
 			const u32 max_zcull_delay_us = 300;
 			const u32 min_zcull_tick_us = 100;
@@ -377,8 +384,11 @@ namespace rsx
 			const u32 occlusion_query_count = 1024;
 			const u32 max_safe_queue_depth = 892;
 
-			bool active = false;
-			bool enabled = false;
+			bool unit_enabled = false;           // The ZCULL unit is on
+			bool write_enabled = false;          // A surface in the ZCULL-monitored tile region has been loaded for rasterization
+			bool stats_enabled = false;          // Collecting of ZCULL statistics is enabled (not same as pixels passing Z test!)
+			bool zpass_count_enabled = false;    // Collecting of ZPASS statistics is enabled. If this is off, the counter does not increment
+			bool host_queries_active = false;    // The backend/host is gathering Z data for the ZCULL unit
 
 			std::array<occlusion_query_info, 1024> m_occlusion_query_data = {};
 			std::stack<occlusion_query_info*> m_free_occlusion_pool;
@@ -397,17 +407,11 @@ namespace rsx
 			std::vector<queued_report_write> m_pending_writes;
 			std::unordered_map<u32, u32> m_statistics_map;
 
-			ZCULL_control();
-			~ZCULL_control();
+			// Enables/disables the ZCULL unit
+			void set_active(class ::rsx::thread* ptimer, bool active, bool flush_queue);
 
-			void set_enabled(class ::rsx::thread* ptimer, bool state, bool flush_queue = false);
-			void set_active(class ::rsx::thread* ptimer, bool state, bool flush_queue = false);
-
-			void write(vm::addr_t sink, u64 timestamp, u32 type, u32 value);
-			void write(queued_report_write* writer, u64 timestamp, u32 value);
-
-			// Read current zcull statistics into the address provided
-			void read_report(class ::rsx::thread* ptimer, vm::addr_t sink, u32 type);
+			// Checks current state of the unit and applies changes
+			void check_state(class ::rsx::thread* ptimer, bool flush_queue);
 
 			// Sets up a new query slot and sets it to the current task
 			void allocate_new_query(class ::rsx::thread* ptimer);
@@ -415,8 +419,23 @@ namespace rsx
 			// Free a query slot in use
 			void free_query(occlusion_query_info* query);
 
+			// Write report to memory
+			void write(vm::addr_t sink, u64 timestamp, u32 type, u32 value);
+			void write(queued_report_write* writer, u64 timestamp, u32 value);
+
+		public:
+
+			ZCULL_control();
+			~ZCULL_control();
+
+			void set_enabled(class ::rsx::thread* ptimer, bool state, bool flush_queue = false);
+			void set_status(class ::rsx::thread* ptimer, bool surface_active, bool zpass_active, bool zcull_stats_active, bool flush_queue = false);
+
+			// Read current zcull statistics into the address provided
+			void read_report(class ::rsx::thread* ptimer, vm::addr_t sink, u32 type);
+
 			// Clears current stat block and increments stat_tag_id
-			void clear(class ::rsx::thread* ptimer);
+			void clear(class ::rsx::thread* ptimer, u32 type);
 
 			// Forcefully flushes all
 			void sync(class ::rsx::thread* ptimer);
@@ -459,7 +478,7 @@ namespace rsx
 			bool reserved = false;
 
 			std::vector<occlusion_query_info*> eval_sources;
-			u32 eval_sync_tag = 0;
+			u64 eval_sync_tag = 0;
 			u32 eval_address = 0;
 
 			// Resets common data
@@ -570,7 +589,9 @@ namespace rsx
 		backend_configuration backend_config{};
 
 		// FIFO
+	public:
 		std::unique_ptr<FIFO::FIFO_control> fifo_ctrl;
+	protected:
 		FIFO::flattening_helper m_flattener;
 		u32 fifo_ret_addr = RSX_CALL_STACK_EMPTY;
 		u32 saved_fifo_ret = RSX_CALL_STACK_EMPTY;
@@ -599,12 +620,12 @@ namespace rsx
 		RsxDmaControl* ctrl = nullptr;
 		rsx_iomap_table iomap_table;
 		u32 restore_point = 0;
-		atomic_t<bool> external_interrupt_lock{ false };
+		atomic_t<u32> external_interrupt_lock{ 0 };
 		atomic_t<bool> external_interrupt_ack{ false };
 		void flush_fifo();
 		void recover_fifo();
-		void fifo_wake_delay(u64 div = 1);
-		u32 get_fifo_cmd();
+		static void fifo_wake_delay(u64 div = 1);
+		u32 get_fifo_cmd() const;
 
 		// Performance approximation counters
 		struct
@@ -656,8 +677,8 @@ namespace rsx
 		u32 local_mem_size{0};
 
 		bool m_rtts_dirty;
-		bool m_textures_dirty[16];
-		bool m_vertex_textures_dirty[4];
+		std::array<bool, 16> m_textures_dirty;
+		std::array<bool, 4> m_vertex_textures_dirty;
 		bool m_framebuffer_state_contested = false;
 		rsx::framebuffer_creation_context m_current_framebuffer_context = rsx::framebuffer_creation_context::context_draw;
 
@@ -692,21 +713,27 @@ namespace rsx
 		void get_current_fragment_program(const std::array<std::unique_ptr<rsx::sampled_image_descriptor_base>, rsx::limits::fragment_textures_count>& sampler_descriptors);
 
 	public:
-		double fps_limit = 59.94;
-
-	public:
-		u64 start_rsx_time = 0;
+		u64 target_rsx_flip_time = 0;
 		u64 int_flip_index = 0;
 		u64 last_flip_time = 0;
 		vm::ptr<void(u32)> flip_handler = vm::null;
 		vm::ptr<void(u32)> user_handler = vm::null;
 		vm::ptr<void(u32)> vblank_handler = vm::null;
 		atomic_t<u64> vblank_count{0};
+		bool capture_current_frame = false;
 
 	public:
 		bool invalid_command_interrupt_raised = false;
 		bool sync_point_request = false;
 		bool in_begin_end = false;
+
+		struct desync_fifo_cmd_info
+		{
+			u32 cmd;
+			u64 timestamp;
+		};
+
+		std::queue<desync_fifo_cmd_info> recovered_fifo_cmds_history;
 
 		atomic_t<s32> async_tasks_pending{ 0 };
 
@@ -899,6 +926,7 @@ namespace rsx
 
 		void pause();
 		void unpause();
+		void wait_pause();
 
 		// Get RSX approximate load in %
 		u32 get_load();

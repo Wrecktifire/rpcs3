@@ -2,6 +2,7 @@
 #include "sys_process.h"
 #include "Emu/Memory/vm_ptr.h"
 #include "Emu/System.h"
+#include "Emu/VFS.h"
 #include "Emu/IdManager.h"
 
 #include "Crypto/unedat.h"
@@ -335,7 +336,7 @@ void _sys_process_exit2(ppu_thread& ppu, s32 status, vm::ptr<sys_exit2_param> ar
 
 	if (Emu.GetCat() == "DG" || Emu.GetCat() == "GD")
 		disc = vfs::get("/dev_bdvd/");
-	if (disc.empty() && Emu.GetTitleID().size())
+	if (disc.empty() && !Emu.GetTitleID().empty())
 		disc = vfs::get(Emu.GetDir());
 
 	vm::temporary_unlock(ppu);
